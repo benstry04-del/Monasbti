@@ -70,6 +70,7 @@ import {
 } from "lucide-react";
 import { api, useStore, isDemo } from "./store";
 import { RealAuth } from "./real-auth";
+import { accountHome, authPath, loginDestination } from "./auth-navigation";
 import {
   occasions,
   categories,
@@ -312,8 +313,19 @@ function App() {
     [busy, setBusy] = useState(false),
     [modal, setModal] = useState<any>(null),
     [menu, setMenu] = useState(false),
+    [signingOut, setSigningOut] = useState(false),
     [demoState, setDemoState] = useState("normal");
   const lastFocus = useRef<any>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const closeMenu = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenu(false);
+      document.querySelector<HTMLButtonElement>(".header .menu-button")?.focus();
+    };
+    addEventListener("keydown", closeMenu);
+    return () => removeEventListener("keydown", closeMenu);
+  }, [menu]);
   useEffect(() => {
     const f = () => {
       setPath(location.pathname);
@@ -377,6 +389,18 @@ function App() {
       setBusy(false);
     }
   }
+  async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      if (await act("LOGOUT", {}, "مع السلامة.. ونشوفكم على خير")) {
+        setModal(null);
+        go("/");
+      }
+    } finally {
+      setSigningOut(false);
+    }
+  }
   function ask(
     title: string,
     action: string,
@@ -387,6 +411,20 @@ function App() {
     setModal({ title, action, p, label, after });
   }
   const role = s.session?.role;
+  const signedIn = Boolean(s.session);
+  const authReady = isDemo || (s.runtime?.ready && !s.runtime?.error);
+  const inAuth = path.startsWith("/auth/");
+  const workspace = accountHome(role);
+  const workspaceLabel = role === "supplier" ? "بوابة المورد" :
+    role === "admin" || role === "staff" ? "لوحة الإدارة" : "لوحة مناسبتكم";
+  const canPlan = !signedIn || role === "customer";
+  const loginLink = authPath("login");
+  useEffect(() => {
+    if (isDemo || !authReady || !signedIn || !inAuth) return;
+    const next = new URLSearchParams(location.search).get("next") || "";
+    history.replaceState({}, "", loginDestination(role, next));
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, [authReady, signedIn, inAuth, path, role]);
   const isAdmin = path.startsWith("/admin"),
     isSupplier = path.startsWith("/supplier"),
     isCustomer = [
@@ -402,7 +440,6 @@ function App() {
       "/favorites",
       "/notifications",
       "/profile",
-      "/support",
     ].some(
       (p) =>
         path === p ||
@@ -412,9 +449,10 @@ function App() {
   const denied =
     (isAdmin && !["admin", "staff"].includes(role)) ||
     (isSupplier && role !== "supplier") ||
-    (isCustomer && !s.session);
+    (isCustomer && !signedIn) ||
+    (!canPlan && /^\/(planner|cart|dashboard|favorites|checkout|payment-result)(\/|$)/.test(path));
   let content: any;
-  const shared = { s, act, ask, busy, setToast, setModal };
+  const shared = { s, act, ask, busy, setToast, setModal, signOut, signingOut };
   if (denied)
     content = (
       <div className="container narrow">
@@ -425,8 +463,8 @@ function App() {
               ? "هذه المساحة مخصصة لفريق العمل المخوّل."
               : "سجّل دخولك لنحفظ تفاصيل مناسبتك ونتابعها معك."
           }
-          to={"/auth/login?next=" + encodeURIComponent(path)}
-          cta="تسجيل الدخول"
+          to={signedIn ? workspace : authPath("login", path + location.search + location.hash)}
+          cta={signedIn ? workspaceLabel : "تسجيل الدخول"}
         />
       </div>
     );
@@ -443,7 +481,7 @@ function App() {
     content = isDemo ? (
       <Auth {...shared} path={path} />
     ) : (
-      <RealAuth key={path} path={path} />
+      signedIn ? null : <RealAuth key={path} path={path} />
     );
   else if (path === "/planner") content = <Planner {...shared} />;
   else if (path === "/cart") content = <Cart {...shared} />;
@@ -516,7 +554,7 @@ function App() {
             >
               الباقات
             </Link>
-            <Link to="/planner">زهّبوا مناسبتكم</Link>
+            {canPlan && <Link to="/planner">زهّبوا مناسبتكم</Link>}
             <Link to="/about">{identity.name ? "عن " + identity.name : "عن المنصة"}</Link>
           </nav>
           <div className="header-actions">
@@ -554,49 +592,37 @@ function App() {
                 ) && <i />}
               </Link>
             )}
-            <Link
+            {canPlan && <Link
               className="icon-btn cart-nav"
               to="/cart"
               aria-label="سلة مناسبتكم"
             >
               <ShoppingBag size={20} />
               {s.cart.length > 0 && <i>{s.cart.length}</i>}
-            </Link>
-            {s.session ? (
-              <Link
-                to={
-                  role === "admin" || role === "staff"
-                    ? "/admin"
-                    : role === "supplier"
-                      ? "/supplier"
-                      : "/dashboard"
-                }
-                className="account"
-              >
-                <span className="avatar">{s.session.name[0]}</span>
-                <span>
-                  يا هلا {s.session.name.split(" ")[0]}
-                  <small>
-                    {role === "customer"
-                      ? "لوحة مناسبتكم"
-                      : role === "supplier"
-                        ? "بوابة المورد"
-                        : "إدارة المنصة"}
-                  </small>
-                </span>
+            </Link>}
+            {(authReady || signedIn) && (signedIn ? (
+              <>
+                <Link to={workspace} className="account" aria-label={workspaceLabel}>
+                  <span className="avatar">{s.session.name?.[0] || <User size={17} />}</span>
+                  <span>يا هلا {s.session.name?.split(" ")[0]}<small>{workspaceLabel}</small></span>
+                </Link>
+                <button type="button" className="icon-btn header-logout" aria-label="تسجيل الخروج"
+                  title="تسجيل الخروج" disabled={signingOut} onClick={signOut}><LogOut size={19} /></button>
+              </>
+            ) : !inAuth && (
+              <Link to={loginLink} className="icon-btn header-login" aria-label="تسجيل الدخول" title="تسجيل الدخول">
+                <User size={19} /><span>تسجيل الدخول</span>
               </Link>
-            ) : (
-              <Btn to="/auth/login" variant="outline desktop">
-                تسجيل الدخول
-              </Btn>
-            )}
-            <Btn to="/planner" className="book-header">
+            ))}
+            {canPlan && <Btn to="/planner" className="book-header">
               زهّبوا الحين
               <CalendarDays size={16} />
-            </Btn>
+            </Btn>}
             <button
               className="icon-btn menu-button"
-              aria-label="فتح القائمة"
+              aria-label={menu ? "إغلاق القائمة" : "فتح القائمة"}
+              aria-expanded={menu}
+              aria-controls="header-mobile-menu"
               onClick={() => setMenu(!menu)}
             >
               {menu ? <X /> : <Menu />}
@@ -604,28 +630,24 @@ function App() {
           </div>
         </div>
         {menu && (
-          <div className="mobile-menu">
+          <div className="mobile-menu" id="header-mobile-menu">
             <Link to="/">الرئيسية</Link>
             {isDemo && <Link to="/demo/motion">تجربة الحركة (Motion Lab)</Link>}
             <Link to="/services">خدماتنا ونقوتنا</Link>
             <Link to="/packages">الباقات المزهّبة</Link>
-            <Link to="/planner">زهّبوا مناسبتكم</Link>
-            <Link to="/dashboard">لوحة مناسبتكم</Link>
-            <Link to="/profile">بياناتكم وملفكم</Link>
+            {canPlan && <Link to="/planner">زهّبوا مناسبتكم</Link>}
+            {signedIn && <>
+              <Link to={workspace}>{workspaceLabel}</Link>
+              <Link to="/profile">بياناتكم وملفكم</Link>
+            </>}
             <Link to="/support">تواصلوا ويا المنسق</Link>
             <Link to="/faq">استفساراتكم وأسئلتكم</Link>
             <Link to="/about">{identity.name ? "عن " + identity.name : "عن المنصة"}</Link>
-            {!s.session && <Link to="/auth/login">تسجيل الدخول</Link>}
-            {s.session && (
-              <button
-                onClick={() => {
-                  act("LOGOUT", {}, "مع السلامة.. ونشوفكم على خير");
-                  go("/");
-                }}
-              >
-                تسجيل الخروج
-              </button>
-            )}
+            {authReady && !signedIn && !inAuth && <>
+              <Link to={loginLink}>تسجيل الدخول</Link>
+              <Link to={authPath("register")}>إنشاء حساب</Link>
+            </>}
+            {signedIn && <button type="button" disabled={signingOut} onClick={signOut}>تسجيل الخروج</button>}
           </div>
         )}
       </header>
@@ -675,15 +697,15 @@ function App() {
       )}
       {!isAdmin && !isSupplier && (isDemo || !path.startsWith("/auth/")) && <Footer />}
       {(isDemo || !path.startsWith("/auth/")) && <nav className="bottom-nav" aria-label="تنقل الهاتف">
-        {(isAdmin
+        {(signedIn && workspace === "/admin"
           ? [
               ["/admin/orders", "الطلبات", ClipboardList],
-              ["/admin/payments", "الدفعات", Wallet],
+              [role === "admin" ? "/admin/payments" : "/admin/approvals", role === "admin" ? "الدفعات" : "الاعتمادات", Wallet],
               ["/admin", "لوحة الإدارة", House],
               ["/admin/reports", "التقارير", ChartNoAxesCombined],
-              ["/admin/settings", "المزيد", Menu],
+              [role === "admin" ? "/admin/settings" : "/profile", role === "admin" ? "الإعدادات" : "حسابي", Menu],
             ]
-          : isSupplier
+          : signedIn && workspace === "/supplier"
             ? [
                 ["/supplier", "الرئيسية", House],
                 ["/supplier/requests", "الطلبات", ClipboardList],
@@ -694,8 +716,8 @@ function App() {
                 ["/", "الرئيسية", House],
                 ["/services", "خدماتنا", Flower2],
                 ["/planner", "زهّبوا الحين", CalendarDays],
-                ["/dashboard", "مناسباتي", Gift],
-                ["/profile", "حسابي", User],
+                ...(signedIn ? [["/dashboard", "مناسباتي", Gift], ["/profile", "حسابي", User]] :
+                  authReady ? [[loginLink, "دخول", User], [authPath("register"), "حساب جديد", Plus]] : []),
               ]
         ).map(([to, title, Icon]: any, i) => (
           <Link
@@ -852,7 +874,7 @@ function Footer() {
     </footer>
   );
 }
-function Hero({ title, sub, text, home = false }: any) {
+function Hero({ title, sub, text, home = false, canPlan = true }: any) {
   return (
     <section className={"hero " + (home ? "home-hero" : "")}>
       <div className="hero-image" />
@@ -864,7 +886,7 @@ function Hero({ title, sub, text, home = false }: any) {
         <h1>{title}</h1>
         <h2>{sub}</h2>
         <p>{text}</p>
-        {home && (
+        {home && canPlan && (
           <div className="hero-select">
             <select
               aria-label="نوع المناسبة"
@@ -996,6 +1018,7 @@ function Home({ s }: any) {
     <>
       <Hero
         home
+        canPlan={!s.session || s.session.role === "customer"}
         title="يا هلا ومسهلا.. زارتنا البركة"
         sub="كل مناسبة تبيّض الوجه.. تبدي من هني"
         text={`من ليالي العمر وأفراح الأهل لي عزائم الديوانية والجمعات الطيبة، نزهّب لكم كل التفاصيل على أصولها.. استريحوا وخلو الباقي على سنع ${brand} وفالكم طيب.`}

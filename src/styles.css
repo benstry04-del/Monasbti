@@ -6181,3 +6181,15 @@ body:has(.admin-navigation-drawer[open]) { overflow: hidden; }
 @media print {
   .admin-compact-toolbar, .admin-navigation-drawer { display: none !important; }
 }
+.header .header-login {
+  gap: 6px;
+  padding-inline: 10px;
+  white-space: nowrap;
+  font-size: 13px;
+}
+@media (max-width: 1250px) {
+  .header-login span { display: none; }
+}
+@media (max-width: 1023px) {
+  .header .header-logout { display: none; }
+}

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { loadingExperience, requestId } from "./experience/loading-controller";
 import { createSerialExecutor } from "./services/serial-mutations.mjs";
 export const isDemo = import.meta.env.MODE === "demo";
-let state: any = {
+const initialState: any = {
   version: 3,
   session: null,
   services: [],
@@ -31,6 +31,8 @@ let state: any = {
   },
   runtime: { mode: "real", ready: false, error: "" },
 };
+let state = initialState;
+const authChangeKey = "habb:auth-change";
 let csrf = "",
   pending: Promise<any> | null = null;
 let transportEpoch = 0;
@@ -68,7 +70,7 @@ async function request(path: string, body?: any, options: any = {}) {
     if (!response.ok)
       throw Object.assign(
         Error(data.message || data.error?.message || "تعذر إتمام الطلب"),
-        { status: response.status, code: data.code },
+        { status: response.status, code: data.code || data.error?.code },
       );
     if (body !== undefined) transportEpoch++;
     if (data.csrfToken && (body !== undefined || startedAt === transportEpoch))
@@ -78,23 +80,31 @@ async function request(path: string, body?: any, options: any = {}) {
     clearTimeout(timer);
   }
 }
+function clearAccountData(session = null) {
+  state = { ...initialState, settings: state.settings, runtime: state.runtime, session };
+}
+function notifyAuthChange() {
+  try { localStorage.setItem(authChangeKey, requestId()); } catch {}
+}
 async function refresh(force = false) {
   if (force && pending) await pending.catch(() => {});
   if (pending) return pending;
   const startedAt = transportEpoch, route=location.pathname;
   pending = (async () => {
+    let session: any;
     try {
-      await request("/auth/session");
+      ({ user: session } = await request("/auth/session"));
       const data = await request("/state?route="+encodeURIComponent(route));
       if (startedAt !== transportEpoch || route!==location.pathname) return state;
       state = {
         ...(data.state || data),
-        runtime: { mode: "real", ready: true, error: "", refreshedAt: Date.now() },
+        runtime: { mode: "real", ready: true, error: "", route, refreshedAt: Date.now() },
       };
       emit();
       return state;
     } catch (e: any) {
       if (startedAt !== transportEpoch || route!==location.pathname) return state;
+      if (session !== undefined && session?.id !== state.session?.id) clearAccountData(session);
       state = {
         ...state,
         runtime: { mode: "real", ready: true, error: e.message },
@@ -142,8 +152,17 @@ const realApi: any = {
     }
     if (action === "REFUND_REFRESH") return refresh(true);
     if (action === "LOGOUT") {
-      await request("/auth/logout", {});
-      return refresh(true);
+      try {
+        await request("/auth/logout", {});
+      } catch (error: any) {
+        if (error.code !== "CSRF_REJECTED") throw error;
+        await request("/auth/session");
+        await request("/auth/logout", {});
+      }
+      clearAccountData();
+      emit();
+      notifyAuthChange();
+      return state;
     }
     if (
       ["LOGIN", "OFFLINE", "EXPIRE", "WEBHOOK", "REFUND_SETTLE"].includes(
@@ -197,7 +216,8 @@ const realApi: any = {
   },
   async authenticate(email: string, password: string) {
     const result = await request("/auth/login", { email, password });
-    if (result.user) await refresh(true);
+    notifyAuthChange();
+    await refresh(true).catch(() => {});
     return result;
   },
   async register(profile: any, password: string) {
@@ -211,7 +231,8 @@ const realApi: any = {
   },
   async verify(email: string, code: string) {
     const result = await request("/auth/verify", { email, code });
-    await refresh(true);
+    notifyAuthChange();
+    await refresh(true).catch(() => {});
     return result;
   },
   async resend(email: string) {
@@ -265,5 +286,11 @@ if (!isDemo) {
   }, 15000);
   addEventListener("popstate",()=>refresh(true).catch(()=>{}));
   addEventListener("online", () => refresh().catch(() => {}));
+  addEventListener("storage", event => {
+    if (event.key === authChangeKey) refresh(true).catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refresh(true).catch(() => {});
+  });
 }
 

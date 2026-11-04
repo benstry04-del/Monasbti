@@ -57,6 +57,13 @@ test("real registration, issued verification, persisted authenticated session an
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "إنشاء حساب", exact: true }).click();
   await expect(page).toHaveURL(/auth\/verify/);
+  await page.getByRole("link", { name: "العودة لتسجيل الدخول" }).click();
+  await page.getByLabel("البريد الإلكتروني", { exact: true }).fill(email);
+  await page.getByLabel("كلمة المرور", { exact: true }).fill("Actual-E2E-Password!");
+  await page.getByRole("button", { name: "تسجيل الدخول", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("تحقق من بريدك قبل تسجيل الدخول");
+  await page.getByRole("link", { name: "كمّلوا تأكيد البريد" }).click();
+  await expect(page.getByLabel("البريد الإلكتروني", { exact: true })).toHaveValue(email);
   const response = await request.get("/__test/verification", {
     params: { email },
   });
@@ -425,4 +432,101 @@ test("admin navigation is searchable, responsive and scoped to the signed-in rol
     await expect(staffNav.getByRole("link",{name:"الربط والتفعيل",exact:true})).toHaveCount(0);
     expect((await staff.request.get("/api/admin/integrations")).status()).toBe(403);
   } finally {await context.close();}
+});
+
+for (const width of [390, 768, 1024, 1440]) {
+  test(`account navigation and sign-out match all roles at ${width}px`, async ({ page, context }) => {
+    test.setTimeout(150000);
+    await context.setExtraHTTPHeaders({ "X-Forwarded-For": "192.0.2." + ([390, 768, 1024, 1440].indexOf(width) + 10) });
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const header = page.locator(".header");
+    for (const [role, destination, label] of [
+      ["customer", "/dashboard", "لوحة مناسبتكم"],
+      ["supplier", "/supplier", "بوابة المورد"],
+      ["staff", "/admin", "لوحة الإدارة"],
+      ["admin", "/admin", "لوحة الإدارة"],
+    ]) {
+      await page.goto("/");
+      await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+      await expect(header.locator(".header-login")).toBeVisible();
+      await expect(header.getByRole("button", { name: "تسجيل الخروج" })).toHaveCount(0);
+      if (width < 1024) {
+        await header.getByRole("button", { name: "فتح القائمة" }).click();
+        await expect(header.locator(".mobile-menu").getByRole("link", { name: "إنشاء حساب" })).toBeVisible();
+        await expect(header.locator(".mobile-menu").getByRole("link", { name: "لوحة مناسبتكم" })).toHaveCount(0);
+        await header.getByRole("button", { name: "إغلاق القائمة" }).click();
+      }
+      await header.locator(".header-login").click();
+      await expect(header.locator(".header-login")).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "أول مرة ويانا" })).toBeVisible();
+      await page.getByLabel("البريد الإلكتروني", { exact: true }).fill(role + "@demo.kw");
+      await page.getByLabel("كلمة المرور", { exact: true }).fill("E2E-Isolated-Password!");
+      await page.getByRole("button", { name: "تسجيل الدخول", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(destination + "$"));
+      await expect(header.locator(".header-login")).toHaveCount(0);
+
+      await page.goto("/auth/register?next=%2Fauth%2Flogin");
+      await expect(page).toHaveURL(new RegExp(destination + "$"));
+      await expect(page.getByRole("button", { name: "إنشاء حساب", exact: true })).toHaveCount(0);
+
+      if (width < 1024) {
+        if (width < 768) {
+          const bottom = page.getByRole("navigation", { name: "تنقل الهاتف" });
+          await expect(bottom).toBeVisible();
+          if (role === "staff") {
+            await expect(bottom.getByRole("link", { name: "الاعتمادات" })).toBeVisible();
+            await expect(bottom.getByRole("link", { name: "الدفعات" })).toHaveCount(0);
+          }
+        }
+        await header.getByRole("button", { name: "فتح القائمة" }).click();
+        const menu = header.locator(".mobile-menu");
+        await expect(menu.getByRole("link", { name: label, exact: true })).toHaveAttribute("href", destination);
+        await expect(menu.getByRole("link", { name: "إنشاء حساب" })).toHaveCount(0);
+      }
+      if (width === 1440 && role === "admin") {
+        const peer = await context.newPage();
+        await peer.goto("/admin");
+        await expect(peer.locator(".header-logout")).toBeVisible();
+        await page.route("**/api/auth/logout", route => route.fulfill({ status: 503, json: { message: "تعذر تسجيل الخروج" } }), { times: 1 });
+        await header.getByRole("button", { name: "تسجيل الخروج" }).click();
+        await expect(page.getByRole("status").filter({ hasText: "تعذر تسجيل الخروج" })).toBeVisible();
+        await expect(page).toHaveURL(/\/admin$/);
+        await header.getByRole("button", { name: "تسجيل الخروج" }).click();
+        await expect(peer.getByRole("heading", { name: "حياك الله، سجّل دخولك" })).toBeVisible();
+        await peer.close();
+      } else {
+        await header.getByRole("button", { name: "تسجيل الخروج" }).click();
+      }
+      await expect(page).toHaveURL(/\/$/);
+      await expect(header.locator(".header-login")).toBeVisible();
+      expect((await (await page.request.get("/api/auth/session")).json()).user).toBeNull();
+      await page.goBack();
+      await expect(page.getByRole("heading", { name: "حياك الله، سجّل دخولك" })).toBeVisible();
+    }
+  });
+}
+
+test("expired session clears privileged navigation and rejects unsafe return destinations", async ({ page, context }) => {
+  await context.setExtraHTTPHeaders({ "X-Forwarded-For": "192.0.2.20" });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/auth/login?next=%2F%2Fexample.test%2F");
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+  await page.getByLabel("البريد الإلكتروني", { exact: true }).fill("staff@demo.kw");
+  const password = page.getByLabel("كلمة المرور", { exact: true });
+  await password.fill("incorrect-password");
+  const submit = page.getByRole("button", { name: "تسجيل الدخول", exact: true });
+  await submit.click();
+  await expect(page.getByRole("alert")).toHaveText("بيانات الدخول غير صحيحة");
+  await expect(page).toHaveURL(/\/auth\/login/);
+  await password.fill("E2E-Isolated-Password!");
+  await submit.click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/auth/login?next=%2Fadmin%2Fsettings");
+  await expect(page).toHaveURL(/\/admin$/);
+  await context.clearCookies({ name: "habb_session" });
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.getByRole("heading", { name: "حياك الله، سجّل دخولك" })).toBeVisible();
+  await expect(page.locator(".header-logout")).toHaveCount(0);
+  await expect(page.locator(".header-login")).toBeVisible();
 });

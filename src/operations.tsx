@@ -1,3 +1,5 @@
+import { staffAllowed } from "./auth-navigation";
+import { BrandedLoader } from "./components/brand-motion/BrandedLoader";
 import {BrandSettings} from "./brand-settings";
 import {branding} from "./branding.mjs";
 import {useRecordPage,RecordPager,downloadRecords,useServerValue} from './record-pagination';
@@ -91,20 +93,6 @@ const adminNav: any[] = [
   ["settings", "الإعدادات", Settings],
   ["integrations", "الربط والتفعيل", ShieldCheck],
   ['deliveries','تسليم الإشعارات',Mail],
-];
-const staffAllowed = [
-  'deliveries',
-  "settlements",
-  "",
-  "orders",
-  "quotes",
-  "approvals",
-  "contracts",
-  "suppliers",
-  "customers",
-  "events",
-  "reports",
-  "audit",
 ];
 function monthlySeries(state: any, count = 6) {
   const now = new Date();
@@ -2624,6 +2612,12 @@ export function Supplier({ s, act, ask, path }: any) {
       (!id || o.id === id),
   );
   const records=useRecordPage('bookings',{...(id?{id}:{}),...(filter!=='all'?{response:filter}:{})},orders,s.runtime?.refreshedAt);
+  if (!vendor) {
+    return <div className="container section">
+      {!isDemo && s.runtime?.route !== path ? <BrandedLoader mode="section" /> :
+        <Empty title="ملف المورد غير متاح" text="تواصلوا مع إدارة المنصة لمراجعة ربط حسابكم بملف المورد." to="/support" cta="تواصلوا ويانا" />}
+    </div>;
+  }
   return (
     <div className="container section supplier-portal">
       <div className="section-title">
@@ -2970,7 +2964,7 @@ export function Supplier({ s, act, ask, path }: any) {
     </div>
   );
 }
-export function Utility({ s, act, path, setToast }: any) {
+export function Utility({ s, act, path, setToast, signOut, signingOut }: any) {
   const brand = branding(s.settings).name || "المنصة";
   const [sent, setSent] = useState(false);
   let title = (
@@ -3170,19 +3164,13 @@ export function Utility({ s, act, path, setToast }: any) {
             <div className="section button-row">
               <Btn
                 variant="outline"
-                onClick={async () => {
-                  await act(
-                    "LOGOUT",
-                    {},
-                    "تم تسجيل الخروج.. مع السلامة وبحفظ الله",
-                  );
-                  go("/");
-                }}
+                onClick={signOut}
+                disabled={signingOut}
               >
                 تسجيل الخروج
                 <LogOut size={16} />
               </Btn>
-              <Btn
+              {isDemo && <Btn
                 variant="text"
                 onClick={async () => {
                   await act(
@@ -3194,7 +3182,7 @@ export function Utility({ s, act, path, setToast }: any) {
                 }}
               >
                 محاكاة انتهاء الجلسة
-              </Btn>
+              </Btn>}
             </div>
           </section>
         ) : (

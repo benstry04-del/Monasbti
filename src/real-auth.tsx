@@ -4,6 +4,7 @@ import { branding } from "./branding.mjs";
 import { api, useStore } from "./store";
 import { Btn, Link, Field, Logo, go } from "./main";
 import "./auth-journey.css";
+import { authPath, loginDestination } from "./auth-navigation";
 
 const copy = {
   login: ["يا هلا بعودتكم", "سجّلوا دخولكم وكملوا من وين وقفتوا.", "تسجيل الدخول"],
@@ -37,6 +38,7 @@ export function RealAuth({ path }: { path: string }) {
   const [email, setEmail] = useState(() => verify ? savedEmail() : "");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [needsVerification, setNeedsVerification] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resending, setResending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -46,9 +48,8 @@ export function RealAuth({ path }: { path: string }) {
   const params = new URLSearchParams(location.search);
   const rawNext = params.get("next") || "";
   const next = /^\/(?![\/\\])/.test(rawNext) && !/[\\\x00-\x1f]/.test(rawNext) ? rawNext : "";
-  const authLink = (target: string) => "/auth/" + target + (next ? "?next=" + encodeURIComponent(next) : "");
-  const finish = (role: string) => go(next || (role === "supplier" ? "/supplier" :
-    ["admin", "staff"].includes(role) ? "/admin" : "/dashboard"));
+  const authLink = (target: string) => authPath(target, next);
+  const finish = (role: string) => go(loginDestination(role, next));
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,6 +58,7 @@ export function RealAuth({ path }: { path: string }) {
     setBusy(true);
     setError("");
     setNotice("");
+    setNeedsVerification(false);
     try {
       if (register) {
         await api.register(values, values.password);
@@ -78,6 +80,10 @@ export function RealAuth({ path }: { path: string }) {
       }
     } catch (failure: any) {
       setError(failure.message);
+      if (failure.code === "EMAIL_NOT_VERIFIED") {
+        rememberEmail(values.email);
+        setNeedsVerification(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -150,6 +156,7 @@ export function RealAuth({ path }: { path: string }) {
             <input type="checkbox" required /> أوافق على <Link to="/faq">الشروط وسياسة الخصوصية</Link>
           </label>}
           {error && <p className="form-error" tabIndex={-1} ref={alert} role="alert">{error}</p>}
+          {needsVerification && <Link className="auth-secondary-link" to={authLink("verify")}>كمّلوا تأكيد البريد</Link>}
           {notice && <p className="info" role="status">{notice}</p>}
           <Btn type="submit" className="full auth-submit" disabled={busy || resending}>
             {busy ? "لحظة… نجهّز طلبكم" : submitLabel}<ArrowLeft size={18} />

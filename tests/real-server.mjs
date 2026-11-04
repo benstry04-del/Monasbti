@@ -3,6 +3,7 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = "pglite:memory";
 process.env.APP_ORIGIN = "http://127.0.0.1:4301";
 process.env.ENABLE_DEMO = "true";
+process.env.TRUST_PROXY = "true"; // Simulate distinct visitors for rate-limited browser scenarios.
 process.env.DEV_DEMO_PASSWORD = "E2E-Isolated-Password!";
 const db = await import("../server/db.mjs");
 const { migrate } = await import("../server/migrate.mjs");
