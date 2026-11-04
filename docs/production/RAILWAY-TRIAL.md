@@ -6,7 +6,7 @@ Application variables:
 
 - NODE_ENV=staging
 - APP_ORIGIN=https://<generated-domain>
-- DATABASE_URL=${{Postgres.DATABASE_URL}}
+- DATABASE_URL (private PostgreSQL URL for habb_runtime)
 - HOST=0.0.0.0
 - TRUST_PROXY=true
 - STORAGE_DIR=/app/data/uploads
@@ -15,8 +15,9 @@ Application variables:
 
 Supply secrets in Railway variables. Leave live payment, payout, notification, and signature credentials unset. Keep the trial separate from commercial infrastructure.
 
-Deploy using Railway CLI from a clean source bundle. Verify the CLI upload exclusions before deploying. Exclude local databases, uploads, credentials, dumps, .env files, tools, and test artifacts. The Docker ignore file also excludes them from the image build. Railway runs migrations before application startup and gates rollout on /health/ready.
+Deploy using Railway CLI from a clean source bundle. Verify the CLI upload exclusions before deploying. Exclude local databases, uploads, credentials, dumps, .env files, tools, and test artifacts. The Docker ignore file also excludes them from the image build. Before the first deployment and before releasing schema changes, run server/provision-runtime.mjs once with the database owner connection and DB_APP_PASSWORD. Give the application only the restricted runtime URL. Railway gates rollout on /health/ready.
 
 To preserve existing demo records, take a logical PostgreSQL export of the isolated trial database and restore it into an empty Railway PostgreSQL database before deploying the app. If the source is PGlite, use its pg_dump tool rather than copying the database directory. Inspect the export for real personal data and enabled integration credentials before transfer. Transfer any required demo uploads separately to the mounted volume. Use new session and encryption secrets for a sanitized trial and remove restored integration secrets and sessions before first start. For a fresh trial, run the demo seed against the dedicated empty cloud database as a one-off with NODE_ENV=development, ENABLE_DEMO=true and a new DEV_DEMO_PASSWORD. Keep the running app in staging.
 
 Before sharing, verify HTTPS, readiness, mobile pages, role sign-in, a booking and supplier update, and persistence after redeploy. Provision database and upload backups separately.
+
