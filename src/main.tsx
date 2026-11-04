@@ -109,6 +109,7 @@ const iconMap = [
 ];
 const A = "/assets/";
 function go(path: string) {
+  if (path === location.pathname + location.search + location.hash) return;
   history.pushState({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
   window.scrollTo({ top: 0, behavior: "instant" });
@@ -119,7 +120,7 @@ function Link({ to, children, className = "", onClick, ...rest }: any) {
       href={to}
       className={className}
       onClick={(e) => {
-        if (!e.ctrlKey && !e.metaKey) {
+        if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && !e.defaultPrevented) {
           e.preventDefault();
           onClick?.(e);
           go(to);
@@ -451,6 +452,7 @@ function App() {
     (isSupplier && role !== "supplier") ||
     (isCustomer && !signedIn) ||
     (!canPlan && /^\/(planner|cart|dashboard|favorites|checkout|payment-result)(\/|$)/.test(path));
+  const adminWorkspace = isAdmin && !denied;
   let content: any;
   const shared = { s, act, ask, busy, setToast, setModal, signOut, signingOut };
   if (denied)
@@ -657,7 +659,7 @@ function App() {
           متاحة للعرض.
         </div>
       )}
-      {!isDemo && s.runtime?.error ? (
+      {!isDemo && s.runtime?.error && !adminWorkspace ? (
         <main className="container section">
           <Empty title="تعذر الاتصال بالخدمة" text={s.runtime.error} />
           <Btn onClick={() => api.refresh().catch(() => {})}>
@@ -691,7 +693,7 @@ function App() {
           </Btn>
         </main>
       ) : (
-        <main key={path} className="page-enter">
+        <main key={adminWorkspace ? "/admin" : path} className={adminWorkspace ? "admin-workspace" : "page-enter"}>
           {content}
         </main>
       )}

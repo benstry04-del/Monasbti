@@ -531,3 +531,58 @@ test("expired session clears privileged navigation and rejects unsafe return des
   await expect(page.locator(".header-logout")).toHaveCount(0);
   await expect(page.locator(".header-login")).toBeVisible();
 });
+
+test("admin sections keep the shell, sidebar scroll and active link during navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/auth/login");
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+  await page.getByLabel("البريد الإلكتروني", { exact: true }).fill("admin@demo.kw");
+  await page.getByLabel("كلمة المرور", { exact: true }).fill("E2E-Isolated-Password!");
+  await page.getByRole("button", { name: "تسجيل الدخول", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin$/);
+  const sidebar = page.locator(".admin-workspace-sidebar");
+  const nav = sidebar.getByRole("navigation", { name: "أقسام الإدارة" });
+  const initialNav = await nav.elementHandle();
+  const settings = nav.getByRole("link", { name: "الإعدادات", exact: true });
+  const audit = nav.locator('a[href="/admin/audit"]');
+  await nav.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  const scroll = await nav.evaluate(el => el.scrollTop);
+  expect(scroll).toBeGreaterThan(0);
+  const documentRequests: string[] = [];
+  page.on("request", request => { if (request.resourceType() === "document") documentRequests.push(request.url()); });
+  await settings.click();
+  await expect(settings).toHaveAttribute("aria-current", "page");
+  await audit.click();
+  await expect(audit).toHaveAttribute("aria-current", "page");
+  expect(await nav.evaluate((el, original) => el === original, initialNav)).toBe(true);
+  expect(await nav.evaluate(el => el.scrollTop)).toBe(scroll);
+  const historyLength = await page.evaluate(() => history.length);
+  await audit.click();
+  expect(await page.evaluate(() => history.length)).toBe(historyLength);
+  await page.goBack();
+  await expect(settings).toHaveAttribute("aria-current", "page");
+  expect(await nav.evaluate(el => el.scrollTop)).toBe(scroll);
+  expect(documentRequests).toEqual([]);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const open = page.getByRole("button", { name: "فتح قائمة الإدارة" });
+  await open.click();
+  const drawer = page.getByRole("dialog", { name: "قائمة الإدارة" });
+  const mobile = drawer.getByRole("navigation", { name: "أقسام الإدارة" });
+  const active = mobile.locator('[aria-current="page"]');
+  await expect(active).toHaveAttribute("href", "/admin/settings");
+  const auditMobile = mobile.locator('a[href="/admin/audit"]');
+  await auditMobile.click();
+  await expect(drawer).toBeHidden();
+  await open.click();
+  await expect(active).toHaveAttribute("href", "/admin/audit");
+  expect(await mobile.evaluate(el => {
+    const item = el.querySelector('[aria-current="page"]')!.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    return item.top >= rect.top - 1 && item.bottom <= rect.bottom + 1;
+  })).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(open).toBeFocused();
+  expect(documentRequests).toEqual([]);
+});

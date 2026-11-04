@@ -107,7 +107,7 @@ async function refresh(force = false) {
       if (session !== undefined && session?.id !== state.session?.id) clearAccountData(session);
       state = {
         ...state,
-        runtime: { mode: "real", ready: true, error: e.message },
+        runtime: { mode: "real", ready: true, error: e.message, route },
       };
       emit();
       throw e;
@@ -204,10 +204,12 @@ const realApi: any = {
         ),
       },
       async () => {
+        const route = location.pathname;
         const data = await request("/commands", { action, payload });
+        if (location.pathname !== route) return refresh(true);
         state = {
           ...(data.state || data),
-          runtime: { mode: "real", ready: true, error: "", refreshedAt: Date.now() },
+          runtime: { mode: "real", ready: true, error: "", route, refreshedAt: Date.now() },
         };
         emit();
         return state;

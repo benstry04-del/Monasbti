@@ -10,7 +10,7 @@ export function useRecordPage(kind:string,params:any,fallback:any[],revision?:nu
     const timer=setTimeout(()=>api.records(kind,{...JSON.parse(key),page}).then((r:any)=>{if(current)setResult(r);}).catch((e:any)=>{if(current)setError(e.message);}).finally(()=>{if(current)setBusy(false);}),150);
     return()=>{current=false;clearTimeout(timer);};
   },[kind,key,page,revision,retry]);
-  return {counts:result?.counts,summary:result?.summary,items:isDemo?fallback:result?.items || [],total:isDemo?fallback.length:result?.total || 0,page,pages:result?.pages || 0,busy,error,setPage,retry:()=>setRetry(n=>n+1)};
+  return {counts:result?.counts,summary:result?.summary,items:isDemo?fallback:result?.items || [],total:isDemo?fallback.length:result?.total || 0,page,pages:result?.pages || 0,busy:(busy && result?.page !== page) || (!isDemo && !result && !error),error,setPage,retry:()=>setRetry(n=>n+1)};
 }
 export function RecordPager({data}:any){
   if(isDemo)return null;
@@ -27,7 +27,20 @@ export function downloadRecords(kind:string,params:any={}){
 }
 
 export function useServerValue(load:()=>Promise<any>,key:string,revision?:number){
-  const [value,setValue]=useState<any>(null),[error,setError]=useState(''),[retry,setRetry]=useState(0);
-  useEffect(()=>{if(isDemo)return;let live=true;setValue(null);setError('');load().then(v=>{if(live)setValue(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[key,revision,retry]);
-  return {value,error,retry:()=>setRetry(n=>n+1)};
+  const [result, setResult] = useState<{ key: string, value: any } | null>(null);
+  const [failure, setFailure] = useState<{ key: string, message: string } | null>(null);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (isDemo) return;
+    let live = true;
+    setFailure(null);
+    load().then(value => { if (live) setResult({ key, value }); })
+      .catch(error => { if (live) setFailure({ key, message: error.message }); });
+    return () => { live = false; };
+  }, [key, revision, retry]);
+  return {
+    value: result?.key === key ? result.value : null,
+    error: failure?.key === key ? failure.message : "",
+    retry: () => setRetry(n => n + 1),
+  };
 }

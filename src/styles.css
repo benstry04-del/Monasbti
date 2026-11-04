@@ -6193,3 +6193,12 @@ body:has(.admin-navigation-drawer[open]) { overflow: hidden; }
 @media (max-width: 1023px) {
   .header .header-logout { display: none; }
 }
+
+.admin-nav-groups { scrollbar-gutter: stable; }
+.admin-page-content { min-width: 0; }
+.admin-section-loading {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}

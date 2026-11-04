@@ -3,7 +3,7 @@ import { BrandedLoader } from "./components/brand-motion/BrandedLoader";
 import {BrandSettings} from "./brand-settings";
 import {branding} from "./branding.mjs";
 import {useRecordPage,RecordPager,downloadRecords,useServerValue} from './record-pagination';
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Play,
@@ -194,8 +194,30 @@ const adminGroups = [
   ["إدارة النظام", ["integrations", "deliveries", "users", "audit", "settings"]],
 ] as const;
 
-function AdminNavigation({ state, page, onNavigate, onClose }: any) {
+function AdminNavigation({ state, page, visible = true, onNavigate, onClose }: any) {
   const [query, setQuery] = useState("");
+  const menu = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const nav = menu.current;
+    if (!visible || !nav) return;
+    const revealActive = () => {
+      const active = nav.querySelector('[aria-current="page"]');
+      if (!nav.clientHeight || !active) return;
+      const bounds = nav.getBoundingClientRect();
+      const current = active.getBoundingClientRect();
+      if (current.top < bounds.top) nav.scrollTop -= bounds.top - current.top;
+      else if (current.bottom > bounds.bottom) nav.scrollTop += current.bottom - bounds.bottom;
+    };
+    revealActive();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(revealActive);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [page, visible, query, state.session.role]);
+  function selectSection() {
+    if (query) setQuery("");
+    onNavigate?.();
+  }
   const identity = branding(state.settings);
   const owner = state.session.role === "admin";
   const normalize = (value: string) => value.trim().replace(/[\u064b-\u065f\u0670]/g, "").replace(/[أإآ]/g, "ا");
@@ -219,11 +241,11 @@ function AdminNavigation({ state, page, onNavigate, onClose }: any) {
       <input type="search" aria-label="ابحث في أقسام الإدارة" placeholder="ابحث في أقسام الإدارة" value={query} onChange={event => setQuery(event.target.value)} />
       {query && <button type="button" onClick={() => setQuery("")} aria-label="مسح البحث"><X size={16} /></button>}
     </div>
-    <nav aria-label="أقسام الإدارة" className="admin-nav-groups">
+    <nav ref={menu} aria-label="أقسام الإدارة" className="admin-nav-groups">
       {groups.map(({label, items}) => <div key={label} className="admin-nav-group">
         <h2>{label}</h2>
         {items.map(([route, title, Icon]) => <Link key={route}
-          to={route ? "/admin/" + route : "/admin"} onClick={onNavigate}
+          to={route ? "/admin/" + route : "/admin"} onClick={selectSection}
           className={route === page ? "active" : ""}
           aria-current={route === page ? "page" : undefined}>
           <Icon size={19} strokeWidth={1.6} />
@@ -250,7 +272,7 @@ export function Admin(props: any) {
   const closeDrawer = () => dialog.current?.close();
   useEffect(() => { dialog.current?.close(); }, [path]);
   useEffect(() => {
-    if (drawer) dialog.current?.querySelector<HTMLButtonElement>(".admin-nav-close")?.focus();
+    if (drawer) dialog.current?.querySelector<HTMLButtonElement>(".admin-nav-close")?.focus({ preventScroll: true });
   }, [drawer]);
   useEffect(() => {
     const desktop = matchMedia("(min-width: 981px)");
@@ -259,17 +281,9 @@ export function Admin(props: any) {
     return () => desktop.removeEventListener("change", closeOnDesktop);
   }, []);
   let title = adminNav.find((n) => n[0] === page)?.[1] || "تفاصيل الطلب";
-  if (s.session.role === "staff" && !staffAllowed.includes(page))
-    return (
-      <div className="container section">
-        <Empty
-          title="هذه الصلاحية مخصصة للمالك"
-          text="يمكنك متابعة الطلبات والتسعير والمراجعة من لوحة التشغيل."
-          to="/admin"
-          cta="العودة للوحة الإدارة"
-        />
-      </div>
-    );
+  const allowed = s.session.role !== "staff" || staffAllowed.includes(page);
+  const routeError = !isDemo && s.runtime?.route === path && s.runtime?.error;
+  const waitingForRoute = !isDemo && (!page || (page === "orders" && id)) && s.runtime?.route !== path;
   return (
     <div className="admin-shell">
       <aside className="admin-sidebar admin-workspace-sidebar">
@@ -278,7 +292,7 @@ export function Admin(props: any) {
       <dialog id="admin-navigation-drawer" ref={dialog} className="admin-navigation-drawer"
         aria-label="قائمة الإدارة" onClose={() => setDrawer(false)}
         onClick={event => { if (event.target === event.currentTarget) closeDrawer(); }}>
-        {drawer && <AdminNavigation state={s} page={page} onNavigate={closeDrawer} onClose={closeDrawer} />}
+        <AdminNavigation state={s} page={page} visible={drawer} onNavigate={closeDrawer} onClose={closeDrawer} />
       </dialog>
       <div className="admin-content">
         <div className="admin-compact-toolbar">
@@ -307,42 +321,55 @@ export function Admin(props: any) {
 
           </div>
         </div>
-        {page === "" ? (
-          <AdminOverview {...props} />
-        ) : page === "orders" && id ? (
-          <OrderEditor {...props} id={id} />
-        ) : page === "orders" ||
-          page === "quotes" ||
-          page === "contracts" ||
-          page === "approvals" ? (
-          <Orders {...props} kind={page} />
-        ) : page === "payments" ? (
-          <Payments {...props} />
-        ) : page === "integrations" ? (
-          <IntegrationSettings />
-        ) : page === 'deliveries' ? (
-          <DeliveryHistory />
-        ) : page === "settlements" ? (
-          <Settlements session={s.session} />
-        ) : page === "catalog" || page === "packages" ? (
-          <ManageCatalog {...props} packages={page === "packages"} />
-        ) : page === "suppliers" ? (
-          <Suppliers {...props} />
-        ) : page === "customers" ? (
-          <Customers {...props} />
-        ) : page === "events" ? (
-          <Events {...props} />
-        ) : page === "reports" ? (
-          <Reports {...props} />
-        ) : page === "users" ? (
-          <Team {...props} />
-        ) : page === "audit" ? (
-          <Audit {...props} />
-        ) : page === "settings" ? (
-          <><BrandSettings settings={s.settings} act={act} /><SettingsPage {...props} /></>
-        ) : (
-          <Empty />
-        )}
+        <div key={path} className="admin-page-content">
+          {!allowed ? (
+            <Empty title="هذه الصلاحية مخصصة للمالك"
+              text="يمكنك متابعة الطلبات والتسعير والمراجعة من لوحة التشغيل."
+              to="/admin" cta="العودة للوحة الإدارة" />
+          ) : routeError ? (
+            <div className="card">
+              <Empty title="تعذر تحميل بيانات القسم" text={s.runtime.error} />
+              <Btn onClick={() => api.refresh(true).catch(() => {})}>إعادة المحاولة</Btn>
+            </div>
+          ) : waitingForRoute ? (
+            <div className="admin-section-loading" role="status">جارٍ تحميل بيانات القسم…</div>
+          ) : page === "" ? (
+            <AdminOverview {...props} />
+          ) : page === "orders" && id ? (
+            <OrderEditor {...props} id={id} />
+          ) : page === "orders" ||
+            page === "quotes" ||
+            page === "contracts" ||
+            page === "approvals" ? (
+            <Orders {...props} kind={page} />
+          ) : page === "payments" ? (
+            <Payments {...props} />
+          ) : page === "integrations" ? (
+            <IntegrationSettings />
+          ) : page === 'deliveries' ? (
+            <DeliveryHistory />
+          ) : page === "settlements" ? (
+            <Settlements session={s.session} />
+          ) : page === "catalog" || page === "packages" ? (
+            <ManageCatalog {...props} packages={page === "packages"} />
+          ) : page === "suppliers" ? (
+            <Suppliers {...props} />
+          ) : page === "customers" ? (
+            <Customers {...props} />
+          ) : page === "events" ? (
+            <Events {...props} />
+          ) : page === "reports" ? (
+            <Reports {...props} />
+          ) : page === "users" ? (
+            <Team {...props} />
+          ) : page === "audit" ? (
+            <Audit {...props} />
+          ) : page === "settings" ? (
+            <><BrandSettings settings={s.settings} act={act} /><SettingsPage {...props} /></>
+          ) : (
+            <Empty />
+          )}
+        </div>
       </div>
     </div>
   );
