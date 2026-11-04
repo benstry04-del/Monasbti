@@ -486,6 +486,7 @@ for (const width of [390, 768, 1024, 1440]) {
       }
       if (width === 1440 && role === "admin") {
         const peer = await context.newPage();
+        await peer.setViewportSize({ width, height: 900 });
         await peer.goto("/admin");
         await expect(peer.locator(".header-logout")).toBeVisible();
         await page.route("**/api/auth/logout", route => route.fulfill({ status: 503, json: { message: "تعذر تسجيل الخروج" } }), { times: 1 });
