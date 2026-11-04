@@ -1,0 +1,84 @@
+name: habb-alsaad
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: habb
+      POSTGRES_USER: habb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U habb -d habb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [private]
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      NODE_ENV: ${DEPLOYMENT_ENV:-production}
+      DATABASE_URL: postgresql://habb:${POSTGRES_PASSWORD}@db:5432/habb
+      DB_SSL: disable
+    command: ["node", "server/provision-runtime.mjs"]
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [private]
+    restart: "no"
+  api:
+    build: .
+    env_file: .env
+    environment:
+      NODE_ENV: ${DEPLOYMENT_ENV:-production}
+      DATABASE_URL: postgresql://habb_runtime:${DB_APP_PASSWORD:?Set DB_APP_PASSWORD}@db:5432/habb
+      DB_SSL: disable
+      HOST: 0.0.0.0
+      TRUST_PROXY: "true"
+      STORAGE_DIR: /app/data/uploads
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    volumes: [uploads:/app/data/uploads]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [private,edge]
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      NODE_ENV: ${DEPLOYMENT_ENV:-production}
+      DATABASE_URL: postgresql://habb_runtime:${DB_APP_PASSWORD:?Set DB_APP_PASSWORD}@db:5432/habb
+      DB_SSL: disable
+      STORAGE_DIR: /app/data/uploads
+    command: ["node", "server/worker.mjs"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    volumes: [uploads:/app/data/uploads]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [private,edge]
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      APP_HOST: ${APP_HOST:?Set APP_HOST DNS hostname}
+    command: ["caddy", "reverse-proxy", "--from", "${APP_HOST}", "--to", "api:3001"]
+    ports: ["80:80", "443:443"]
+    volumes: [caddy_data:/data,caddy_config:/config]
+    depends_on: [api]
+    restart: unless-stopped
+    networks: [edge]
+networks:
+  private: {internal: true}
+  edge: {}
+volumes:
+  pgdata: {}
+  uploads: {}
+  caddy_data: {}
+  caddy_config: {}

@@ -1,0 +1,60 @@
+name: verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: habb
+          POSTGRES_PASSWORD: integration-only-password
+          POSTGRES_DB: habb_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U habb -d habb_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://habb:integration-only-password@localhost:5432/habb_test
+      APP_ORIGIN: http://localhost:5173
+      COOKIE_SECRET: ci-only-cookie-secret-not-for-production-123456
+      ENCRYPTION_KEY: 25ab56b82eb33e934270baf11ee07bc506b0bfc458775d50daaf96250eea97445
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm}
+      - run: npm ci
+      - run: node server/migrate.mjs
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/verify-client-secrets.mjs
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:real
+      - name: Real PostgreSQL booking and conflict workflows
+        run: |
+          createdb -h localhost -U habb habb_business
+          TEST_DATABASE_URL=postgresql://habb:integration-only-password@localhost:5432/habb_business node --import ./tests/env-test.mjs --test tests/business.test.mjs
+          TEST_DATABASE_URL=postgresql://habb:integration-only-password@localhost:5432/habb_business CONFIRM_ISOLATED_DATABASE=true node tests/pg-runtime.mjs
+          createdb -h localhost -U habb habb_integrations
+          TEST_DATABASE_URL=postgresql://habb:integration-only-password@localhost:5432/habb_integrations node --import ./tests/env-test.mjs --test tests/integrations.test.mjs
+          createdb -h localhost -U habb habb_settlements
+          TEST_DATABASE_URL=postgresql://habb:integration-only-password@localhost:5432/habb_settlements node --import ./tests/env-test.mjs --test tests/settlements.test.mjs
+          for suite in admin-integrations notification-delivery signatures records; do
+            database="habb_${suite//-/_}"
+            createdb -h localhost -U habb "$database"
+            TEST_DATABASE_URL="postgresql://habb:integration-only-password@localhost:5432/$database" node --import ./tests/env-test.mjs --test "tests/$suite.test.mjs"
+          done
+          createdb -h localhost -U habb habb_load_ci
+          TEST_DATABASE_URL=postgresql://habb:integration-only-password@localhost:5432/habb_load_ci CONFIRM_ISOLATED_DATABASE=true node --import ./tests/env-test.mjs tests/load-records.mjs
+        env:
+          PGPASSWORD: integration-only-password
+      - run: docker build -t habb-alsaad:${{ github.sha }} .
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-diagnostics
+          path: test-results
+          if-no-files-found: ignore

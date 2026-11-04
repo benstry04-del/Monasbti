@@ -1,0 +1,13 @@
+{
+  "source": "C:\\Users\\OMAR1\\Downloads\\HABB_ALSAAD_MOTION_EXPERIENCE_CODEX_HANDOFF\\HABB_ALSAAD_MOTION_HANDOFF\\gemini_generated_video_ac069cf0.mp4",
+  "sha256": "3683531b08b0c44e06e83bd4b1b1b766339c6a5bfcbf2600fbb5e672ae96da31",
+  "duration": 20.01,
+  "sourceResolution": "720x1280",
+  "note": "Original film retained, no regenerated frames; native portrait proportions preserved.",
+  "outputs": {
+    "intro-v1-desktop.mp4": 5238951,
+    "intro-v1-desktop.webm": 4681090,
+    "intro-v1-mobile.mp4": 2629555,
+    "intro-v1-mobile.webm": 2743832
+  }
+}

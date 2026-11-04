@@ -1,0 +1,66 @@
+{
+  "name": "monasabati-prototype",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:client": "node scripts/start-client-demo.mjs",
+    "start": "node scripts/start.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && node scripts/build-frontend.mjs",
+    "test": "node --import ./tests/env-test.mjs --test tests/*.test.mjs",
+    "test:e2e": "playwright test",
+    "preview": "vite preview --host 0.0.0.0",
+    "dev:demo": "vite --mode demo --host 127.0.0.1",
+    "server": "node server/app.mjs",
+    "worker": "node server/worker.mjs",
+    "db:migrate": "node server/migrate.mjs",
+    "db:bootstrap": "node server/bootstrap.mjs",
+    "db:seed:demo": "node server/seed-demo.mjs",
+    "start:production": "node server/app.mjs",
+    "test:e2e:real": "playwright test --config playwright.real.config.ts",
+    "audit:launch": "node server/launch-audit.mjs",
+    "setup:prepare": "node scripts/prepare-configuration.mjs",
+    "setup:business": "node scripts/apply-business-settings.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.13",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/formbody": "^9.0.1",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/multipart": "^10.1.6",
+    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.8",
+    "@sentry/node": "^11.10.0",
+    "fastify": "^5.12.7",
+    "fastify-raw-body": "^6.0.3",
+    "lucide-react": "^0.468.0",
+    "nodemailer": "^10.3.1",
+    "pdfkit": "^0.20.2",
+    "pg": "^8.23.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "svix": "^2.9.1",
+    "three": "^0.186.1",
+    "twilio": "^6.2.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.51.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "autocannon": "^8.0.0",
+    "prettier": "^3.9.10",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  },
+  "overrides": {
+    "glob": "14.0.3",
+    "minimatch": "11.0.3",
+    "hyperid": {
+      "uuid": "11.1.1"
+    }
+  }
+}

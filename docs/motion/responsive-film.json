@@ -1,0 +1,112 @@
+[
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      320,
+      720
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      360,
+      800
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      390,
+      844
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      430,
+      932
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      768,
+      1024
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      1024,
+      768
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      1366,
+      768
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      1440,
+      900
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      1920,
+      1080
+    ],
+    "scroll": 0,
+    "video": 1
+  },
+  {
+    "controls": true,
+    "controlsCount": 3,
+    "overflow": false,
+    "screen": [
+      844,
+      390
+    ],
+    "scroll": 0,
+    "video": 1
+  }
+]

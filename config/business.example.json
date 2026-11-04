@@ -1,0 +1,15 @@
+{
+  "companyName": "",
+  "registrationNumber": "",
+  "contactEmail": "",
+  "contactPhone": "",
+  "terms": "",
+  "privacy": "",
+  "cancellation": "",
+  "taxRate": 0,
+  "deposit": 30,
+  "second": 40,
+  "threshold": 20,
+  "earlyPayment": false,
+  "doubleApproval": true
+}

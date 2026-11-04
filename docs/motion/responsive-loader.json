@@ -1,0 +1,92 @@
+[
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      320,
+      720
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      360,
+      800
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      390,
+      844
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      430,
+      932
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      768,
+      1024
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      1024,
+      768
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      1366,
+      768
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      1440,
+      900
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      1920,
+      1080
+    ],
+    "success": 0
+  },
+  {
+    "overflow": false,
+    "present": true,
+    "screen": [
+      844,
+      390
+    ],
+    "success": 0
+  }
+]
