@@ -21,3 +21,5 @@ To preserve existing demo records, take a logical PostgreSQL export of the isola
 
 Before sharing, verify HTTPS, readiness, mobile pages, role sign-in, a booking and supplier update, and persistence after redeploy. Provision database and upload backups separately.
 
+
+On Railway set the web start command to sh /app/server/railway-start.sh and set RAILWAY_RUN_UID=0 for the web service. The start script sets permissions on the mounted directory and immediately drops privileges before starting Node. Create a separate worker service from the same repository with start command node server/worker.mjs and no public domain. It uses the same restricted DB credentials and encryption key.
