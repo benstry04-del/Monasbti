@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { api, isDemo } from "./store";
-import { Btn, Price, Field, Empty } from "./main";
+import { Btn, Price, Field, Empty, Badge, StatusAlert } from "./main";
 const names: any = {
   IN_REVIEW: "بانتظار الموافقتين",
   APPROVED: "معتمدة للتحويل",
@@ -62,14 +62,19 @@ export function Settlements({ session }: any) {
     <div className="settlements-view">
       <h2>تسويات مستحقات الموردين</h2>
       {error && (
-        <div role="alert" className="error">
-          <p>{error}</p>
-          <Btn onClick={load} disabled={busy}>
-            إعادة المحاولة
-          </Btn>
-        </div>
+        <StatusAlert
+          tone="error"
+          role="alert"
+          action={
+            <Btn intent="warn" loading={busy} onClick={load} disabled={busy}>
+              إعادة المحاولة
+            </Btn>
+          }
+        >
+          {error}
+        </StatusAlert>
       )}
-      {!data && !error && <p role="status">جارٍ تحميل التسويات…</p>}
+      {!data && !error && <StatusAlert tone="in-progress" role="status">جارٍ تحميل التسويات…</StatusAlert>}
       {data && (
         <>
           <div className="kpi-grid">
@@ -83,10 +88,10 @@ export function Settlements({ session }: any) {
             </section>
           </div>
           {operator && !data.configured && (
-            <p className="info">
+            <StatusAlert tone="warning">
               جهة التحويل غير مهيأة. يمكن تسجيل المستحقات ومراجعتها؛ لن يُرسل
               تحويل حتى تكتمل تهيئة الجهة المعتمدة.
-            </p>
+            </StatusAlert>
           )}
           {operator && (
             <section className="card">
@@ -103,6 +108,8 @@ export function Settlements({ session }: any) {
                     </div>
                     <Price value={Number(e.remaining_minor) / 1000} />
                     <Btn
+                      intent="primary"
+                      loading={busy}
                       disabled={busy || !e.recipient_ref}
                       onClick={() =>
                         mutate("", {
@@ -129,7 +136,7 @@ export function Settlements({ session }: any) {
                 <h3>{r.snapshot.supplierName}</h3>
                 <p>{r.booking_id}</p>
                 <p>
-                  <strong>{names[r.status]}</strong> ·{" "}
+                  <Badge status={r.status}>{names[r.status]}</Badge> ·{" "}
                   <Price value={r.amount} />
                 </p>
                 <p>
@@ -181,13 +188,15 @@ export function Settlements({ session }: any) {
                           required
                         />
                       </Field>
-                      <Btn type="submit" disabled={busy}>
+                      <Btn type="submit" intent="success" loading={busy} disabled={busy}>
                         تسجيل الموافقة المستقلة
                       </Btn>
                     </form>
                   )}
                 {session.role === "admin" && r.status === "APPROVED" && (
                   <Btn
+                    intent="success"
+                    loading={busy}
                     disabled={busy || !data.configured}
                     onClick={() => mutate("/" + r.id + "/submit")}
                   >
@@ -197,6 +206,8 @@ export function Settlements({ session }: any) {
                 {operator && ["SUBMITTING", "PENDING"].includes(r.status) && (
                   <Btn
                     variant="outline"
+                    intent="info"
+                    loading={busy}
                     disabled={busy || !data.configured}
                     onClick={() => mutate("/" + r.id + "/refresh")}
                   >
@@ -221,7 +232,7 @@ export function Settlements({ session }: any) {
                           maxLength={1000}
                         />
                       </Field>
-                      <Btn type="submit" variant="text" disabled={busy}>
+                      <Btn type="submit" variant="text" intent="danger" loading={busy} disabled={busy}>
                         إلغاء قبل إرسال التحويل
                       </Btn>
                     </form>
@@ -232,6 +243,7 @@ export function Settlements({ session }: any) {
           <div className="button-row">
             <Btn
               variant="outline"
+              intent="info"
               disabled={busy || page === 1}
               onClick={() => setPage(page - 1)}
             >
@@ -240,6 +252,7 @@ export function Settlements({ session }: any) {
             <span>الصفحة {page}</span>
             <Btn
               variant="outline"
+              intent="info"
               disabled={busy || !data.hasMore}
               onClick={() => setPage(page + 1)}
             >

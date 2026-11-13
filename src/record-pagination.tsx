@@ -15,15 +15,17 @@ export function useRecordPage(kind:string,params:any,fallback:any[],revision?:nu
 export function RecordPager({data}:any){
   if(isDemo)return null;
   return <div className="record-pager" aria-label="ترقيم النتائج" aria-busy={data.busy}>
-    {data.error?<><p role="alert">{data.error}</p><button onClick={data.retry}>إعادة المحاولة</button></>:<>
+    {data.error?<div className="status-alert status-alert--error" role="alert" style={{width:'100%',margin:0}}><span className="status-alert__content">{data.error}</span><button className="btn intent-warn" onClick={data.retry}>إعادة المحاولة</button></div>:<>
       <span role="status">{data.busy?'جارٍ تحميل النتائج…':`${data.total} نتيجة · الصفحة ${data.page} من ${Math.max(1,data.pages)}`}</span>
-      <button disabled={data.busy || data.page<=1} onClick={()=>data.setPage(data.page-1)}>السابق</button>
-      <button disabled={data.busy || data.page>=data.pages} onClick={()=>data.setPage(data.page+1)}>التالي</button>
+      <button className="intent-info" disabled={data.busy || data.page<=1} onClick={()=>data.setPage(data.page-1)}>السابق</button>
+      <button className="intent-info" disabled={data.busy || data.page>=data.pages} onClick={()=>data.setPage(data.page+1)}>التالي</button>
     </>}
   </div>;
 }
-export function downloadRecords(kind:string,params:any={}){
-  const a=document.createElement('a');a.href='/api/records/'+kind+'/export?'+new URLSearchParams(params);a.download='';document.body.appendChild(a);a.click();a.remove();
+export function downloadRecords(kind:string,params:any={},format=''){
+  const qs=new URLSearchParams(params);
+  if(format)qs.set('format',format);
+  const a=document.createElement('a');a.href='/api/records/'+kind+'/export?'+qs;a.download='';document.body.appendChild(a);a.click();a.remove();
 }
 
 export function useServerValue(load:()=>Promise<any>,key:string,revision?:number){

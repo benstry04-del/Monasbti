@@ -1,4 +1,4 @@
-import { useContent } from "../../content";
+import { useContent, contentImage } from "../../content";
 import {branding} from "../../branding.mjs";
 import {useStore} from "../../store";
 import React, { useEffect, useRef } from "react";
@@ -35,7 +35,7 @@ export function PromoFilmCard() {
     >
       <div className="promo-film-card">
         <img
-          src={mediaAssets.poster}
+          src={contentImage(contentText("home.promo.image",""),mediaAssets.poster)}
           alt="لقطة من فيلم هَبّ السعد"
           loading="lazy"
         />

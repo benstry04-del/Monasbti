@@ -4,6 +4,7 @@ import {Readable} from 'node:stream';
 import {readState} from './business.mjs';
 import {httpError} from './security.mjs';
 import {labels,pricing} from '../src/domain.mjs';
+import { generateXlsx } from '../src/excel-export.mjs';
 const paging=z.object({page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(25),q:z.string().max(100).default(''),status:z.string().max(50).default('')}).passthrough();
 const privileged=a=>['admin','staff'].includes(a?.role);
 const queryContractAccess=(raw,actor)=>raw.kind==="contracts" && hasPermission(actor,"contracts.view");
@@ -84,6 +85,13 @@ export async function readRecordPage(db,actor,visitorId,kind,raw={}){
     else if(kind==='services')items=found.map(r=>({...r.data,id:r.id,available:r.active,capacity:r.capacity}));
     else if(kind==='packages')items=found.map(r=>({...r.data,id:r.id,active:r.active}));
     else items=found.map(r=>({...r.data,id:r.id,userId:r.user_id,at:r.created_at}));
+    if (kind === "payments" && p.query.id && items.length) {
+      const refunds = (await c.query(
+        "SELECT id,amount_minor,status,created_at,updated_at FROM refunds WHERE payment_id=$1 ORDER BY created_at DESC",
+        [items[0].id],
+      )).rows;
+      items[0].refunds = refunds.map(({amount_minor,...refund})=>({...refund,amount:Number(amount_minor)/1000}));
+    }
     if (actor.staffRoleId && kind === "audit" && ["costs.view","profit.view","discounts.view"].some(permission=>!hasPermission(actor,permission)))
       items = items.map(({before,after,...item})=>item);
     if (actor.staffRoleId && !hasPermission(actor,"costs.view")) {
@@ -110,6 +118,121 @@ export async function registerRecordRoutes(app){
     const permission = {bookings:"orders.export",payments:"payments.export",audit:"audit.export"}[req.params.kind];
     if (req.actor.staffRoleId && !hasPermission(req.actor,permission)) throw httpError(403,"غير مخول");
     if(!['bookings','payments','audit'].includes(req.params.kind))throw httpError(400,'نوع التصدير غير متاح');
+    if (req.query.format === "xlsx") {
+      const items = [];
+      const client = await db.pool.connect();
+      let success = false;
+      try {
+        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        const snapshot = { transaction: fn => fn(client) };
+        for (let page = 1; page <= 100; page++) {
+          const batch = await readRecordPage(snapshot, req.actor, req.visitorId, req.params.kind, { ...req.query, page, pageSize: 100 });
+          items.push(...batch.items);
+          if (page >= batch.pages) break;
+        }
+        success = true;
+      } finally {
+        await client.query(success ? "COMMIT" : "ROLLBACK").catch(() => {});
+        client.release();
+      }
+      const kind = req.params.kind;
+      let sheet;
+      if (kind === "bookings") {
+        let sum = 0;
+        const rows = items.map(row => {
+          const amount = Number(row.financials?.total ?? row.contract?.total ?? row.amount ?? pricing(row.lines || [], row.discount || 0).total ?? 0);
+          sum += amount;
+          return [
+            row.id,
+            row.customer || "",
+            row.occasion?.date || String(row.at || "").slice(0, 10),
+            row.eventType || row.occasion?.type || "",
+            amount,
+            { code: row.status, label: labels[row.status] || row.status },
+          ];
+        });
+        sheet = {
+          name: "سجل الطلبات",
+          title: "هَبّ السعد — سجل الطلبات والحجوزات",
+          subtitle: `عدد السجلات: ${items.length}`,
+          columns: [
+            { header: "المرجع", type: "code", width: 18 },
+            { header: "العميل", type: "text", width: 22 },
+            { header: "التاريخ", type: "date", width: 15 },
+            { header: "نوع المناسبة", type: "text", width: 18 },
+            { header: "المبلغ (د.ك)", type: "currency", width: 18 },
+            { header: "الحالة", type: "status", width: 20 },
+          ],
+          rows,
+          totals: rows.length ? ["الإجمالي", `${rows.length} طلب`, "", "", sum, ""] : null,
+        };
+      } else if (kind === "payments") {
+        let sumAmount = 0;
+        let sumRefunded = 0;
+        const rows = items.map(row => {
+          const amount = Number(row.amount || 0);
+          const refunded = Number(row.refunded || 0);
+          sumAmount += amount;
+          sumRefunded += refunded;
+          return [
+            row.id,
+            row.orderId || "",
+            row.customer || "",
+            row.method || "",
+            row.receipt || "",
+            String(row.at || "").slice(0, 10),
+            amount,
+            refunded,
+            { code: row.status, label: labels[row.status] || row.status },
+          ];
+        });
+        sheet = {
+          name: "المدفوعات",
+          title: "هَبّ السعد — سجل المدفوعات والتحصيل",
+          subtitle: `عدد العمليات: ${items.length}`,
+          columns: [
+            { header: "رقم العملية", type: "code", width: 18 },
+            { header: "رقم الطلب", type: "code", width: 16 },
+            { header: "العميل", type: "text", width: 20 },
+            { header: "وسيلة الدفع", type: "text", width: 15 },
+            { header: "الإيصال / المرجع", type: "code", width: 20 },
+            { header: "التاريخ", type: "date", width: 15 },
+            { header: "المبلغ (د.ك)", type: "currency", width: 16 },
+            { header: "المسترد (د.ك)", type: "currency", width: 16 },
+            { header: "الحالة", type: "status", width: 18 },
+          ],
+          rows,
+          totals: rows.length ? ["الإجمالي", `${rows.length} دفعة`, "", "", "", "", sumAmount, sumRefunded, ""] : null,
+        };
+      } else {
+        sheet = {
+          name: "سجل التدقيق",
+          title: "هَبّ السعد — سجل التدقيق والعمليات",
+          subtitle: `عدد السجلات: ${items.length}`,
+          columns: [
+            { header: "المعرف", type: "code", width: 18 },
+            { header: "التوقيت", type: "date", width: 20 },
+            { header: "المنفذ", type: "text", width: 20 },
+            { header: "الإجراء", type: "code", width: 24 },
+            { header: "العنصر المستهدف", type: "code", width: 22 },
+            { header: "التفاصيل", type: "text", width: 34 },
+          ],
+          rows: items.map(row => [
+            row.id,
+            String(row.at || "").slice(0, 19).replace("T", " "),
+            row.actor || "",
+            row.action || "",
+            row.entity || "",
+            row.after ? JSON.stringify(row.after).slice(0, 240) : "",
+          ]),
+        };
+      }
+      const bytes = generateXlsx({ sheets: [sheet] });
+      reply
+        .header("Content-Disposition", `attachment; filename="${kind}.xlsx"`)
+        .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return reply.send(Buffer.from(bytes));
+    }
     const json=req.params.kind==='audit';
     async function* output(){
       const client=await db.pool.connect();let success=false;

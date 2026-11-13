@@ -4,6 +4,35 @@ export function packageIdOf(line) {
   return line.packageId || (line.id.split(":").length >= 3 ? line.id.split(":")[0] : null);
 }
 
+export function pricePackage(pack, services, guests, option, extras = []) {
+  const config = pack.configuration;
+  const count = guests ?? pack.capacity;
+  if (!Number.isInteger(count) || count < (config?.minGuests ?? 1) || count > (config?.maxGuests ?? 100000))
+    throw Error("عدد الضيوف خارج حدود الباقة");
+  const choice = config?.options?.find(item => item.name === option);
+  if (config?.options?.length && !choice) throw Error("اختاروا أحد خيارات الباقة");
+  if (!Array.isArray(extras) || new Set(extras).size !== extras.length ||
+      extras.some(id => !config?.extraServiceIds?.includes(id)))
+    throw Error("الخدمات الإضافية لا تتبع هذه الباقة");
+  const included = [...new Set(pack.serviceIds)].map(id => services.find(item => item.id === id));
+  const additional = extras.map(id => services.find(item => item.id === id));
+  if (!included.length || [...included,...additional].some(item => !item))
+    throw Error("تحتاج الباقة تحديث خدماتها من الإدارة");
+  const base = included.reduce((sum,item) => sum + Math.round(item.price * 1000),0);
+  const target = Math.round(pack.price * (config?.pricing === "fixed" ? 1 : count / pack.capacity) * 1000) +
+    Math.round((choice?.surcharge ?? 0) * 1000);
+  let allocated = 0;
+  let weight = 0;
+  const lines = included.map(item => {
+    weight += base ? Math.round(item.price * 1000) : 1;
+    const boundary = Math.round(target * weight / (base || included.length));
+    const price = (boundary - allocated) / 1000;
+    allocated = boundary;
+    return {item,price};
+  }).concat(additional.map(item => ({item,price:item.price})));
+  return {lines,total:(target + additional.reduce((sum,item)=>sum+Math.round(item.price*1000),0))/1000,count};
+}
+
 export const occasions = [
   "حفل زفاف",
   "خطوبة",
@@ -563,32 +592,23 @@ export function dispatch(state, action, p = {}) {
         throw Error("يمكن اختيار الباقة مرة واحدة لكل طلب");
       if (s.cart.some(line => packageIdOf(line) === pack.id))
         throw Error("هذه الباقة موجودة في السلة");
-      const selected = [...new Set(pack.serviceIds)].map((id) =>
-        s.services.find((x) => x.id === id),
-      );
-      if (selected.some((x) => !x))
-        throw Error("تحتاج الباقة تحديث خدماتها من الإدارة");
-      const base = selected.reduce((n, x) => n + x.price, 0),
-        target = (pack.price * (p.guests || pack.capacity)) / pack.capacity;
-      let allocated = 0;
-      selected.forEach((x, i) => {
-        const price =
-          i === selected.length - 1
-            ? Math.round((target - allocated) * 1000) / 1000
-            : Math.round((base ? x.price / base : 1 / selected.length) * target * 1000) / 1000;
-        allocated += price;
+      const extras = p.extras || [];
+      const {lines,count} = pricePackage(pack,s.services,p.guests,p.option,extras);
+      const instance = crypto.randomUUID();
+      for (const {item,price} of lines) {
         s.cart.push({
-          ...x,
-          id: pack.id + ":" + crypto.randomUUID() + ":" + x.id,
-          title: x.title + " — " + pack.title,
+          ...item,
+          id: pack.id + ":" + instance + ":" + item.id,
+          title: item.title + " — " + pack.title,
           packageId: pack.id,
-          packageGuests: p.guests || pack.capacity,
+          packageGuests: count,
+          packageExtras: extras,
           price,
           qty: 1,
           option: p.option || "الأساسية",
           response: "WAITING",
         });
-      });
+      }
       break;
     }
     case "CART_REMOVE": {

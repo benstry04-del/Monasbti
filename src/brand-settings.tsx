@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { branding, defaultBrand, defaultLatin, logoDefaults } from './branding.mjs';
-import { Btn, Field } from './main';
+import { Btn, Field, StatusAlert } from './main';
 
 const images = [
   ['brandLogo', 'logo', 'الشعار الكامل للفوتر والدخول والوثائق'],
@@ -53,15 +53,15 @@ export function BrandSettings({ settings, act }: any) {
       <input type="file" accept="image/png,image/jpeg,image/webp" aria-label={label} disabled={busy}
         onChange={e => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ''; void upload(key, file); }} />
       <div className="button-row">
-        <Btn type="button" variant="outline" onClick={() => update(key, null)}>حذف الصورة</Btn>
-        <Btn type="button" variant="text" onClick={() => update(key, logoDefaults[slot])}>استعادة الصورة الأصلية</Btn>
+        <Btn type="button" variant="outline" intent="danger" onClick={() => update(key, null)}>حذف الصورة</Btn>
+        <Btn type="button" variant="text" intent="warn" onClick={() => update(key, logoDefaults[slot])}>استعادة الصورة الأصلية</Btn>
       </div>
     </fieldset>)}
-    {error && <p role="alert">{error}</p>}
+    {error && <StatusAlert tone="error" role="alert">{error}</StatusAlert>}
     <div className="button-row">
-      <Btn type="submit" disabled={busy || !Object.keys(draft).length}>حفظ الهوية</Btn>
-      <Btn type="button" variant="outline" onClick={() => setDraft({ brand: "", brandLatin: "", brandLogo: null, brandEmblem: null, brandIcon: null })}>إخفاء الهوية بالكامل</Btn>
-      <Btn type="button" variant="text" onClick={() => setDraft({
+      <Btn type="submit" intent="success" loading={busy} disabled={busy || !Object.keys(draft).length}>حفظ الهوية</Btn>
+      <Btn type="button" variant="outline" intent="danger" onClick={() => setDraft({ brand: "", brandLatin: "", brandLogo: null, brandEmblem: null, brandIcon: null })}>إخفاء الهوية بالكامل</Btn>
+      <Btn type="button" variant="text" intent="warn" onClick={() => setDraft({
         brand: defaultBrand, brandLatin: defaultLatin,
         brandLogo: logoDefaults.logo, brandEmblem: logoDefaults.emblem, brandIcon: logoDefaults.icon,
       })}>استعادة الهوية الأصلية</Btn>

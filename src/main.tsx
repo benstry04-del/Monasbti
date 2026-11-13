@@ -1,5 +1,7 @@
-import { useContent } from "./content";
+import { homeSections } from "./content-fields.mjs";
+import { useContent, contentImage } from "./content";
 import {branding} from "./branding.mjs";
+import { renderUnifiedDocument, escapeHTML as escapeDocHTML } from "./document-layout.mjs";
 import {useRecordPage,RecordPager} from './record-pagination';
 import { couponDiscount, installmentMinors } from "./money.mjs";
 import React, { useState, useEffect, useRef } from "react";
@@ -68,12 +70,19 @@ import {
   Globe,
   LockKeyhole,
   ExternalLink,
+  AlertTriangle,
+  Info,
+  XCircle,
+  Ban,
+  Archive,
+  Loader2,
 } from "lucide-react";
 import { api, useStore, isDemo } from "./store";
 import { RealAuth } from "./real-auth";
 import { accountHome, authPath, loginDestination } from "./auth-navigation";
 import {
   packageIdOf,
+  pricePackage,
   occasions,
   categories,
   labels,
@@ -164,19 +173,34 @@ function Btn({
   onClick,
   to,
   variant = "",
+  intent = "",
+  loading = false,
   className = "",
+  disabled,
   ...rest
 }: any) {
+  const cls = [
+    "btn",
+    variant,
+    intent ? `intent-${intent}` : "",
+    loading ? "is-loading" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return to ? (
-    <Link to={to} className={"btn " + variant + " " + className} {...rest}>
+    <Link to={to} className={cls} {...rest}>
       {children}
     </Link>
   ) : (
     <button
-      className={"btn " + variant + " " + className}
+      className={cls}
       onClick={onClick}
+      disabled={Boolean(disabled || loading)}
+      aria-busy={loading || undefined}
       {...rest}
     >
+      {loading ? <Loader2 size={15} className="btn-spinner" aria-hidden="true" /> : null}
       {children}
     </button>
   );
@@ -188,28 +212,152 @@ function Price({ value, className = "" }: any) {
     </span>
   );
 }
-function Badge({ status, children }: any) {
-  let good = [
-      "CONFIRMED",
-      "PAID",
-      "CONFIRMED_SUPPLIER",
-      "SIGNED",
-      "COMPLETED",
-      "CONTRACT_APPROVED",
-    ].includes(status),
-    bad = [
-      "FAILED",
-      "PAYMENT_FAILED",
-      "CANCELLED",
-      "REJECTED",
-      "DISPUTED",
-    ].includes(status);
+const BADGE_STATUS_MAP: Record<string, string> = {
+  COMPLETED: "completed",
+  SIGNED: "completed",
+  SETTLED: "completed",
+  APPROVED: "completed",
+  CONTRACT_APPROVED: "completed",
+  PAID: "completed",
+  CONFIRMED: "completed",
+  RESOLVED: "completed",
+  SUCCESS: "success",
+  ACTIVE: "success",
+  VERIFIED: "success",
+  AVAILABLE: "success",
+  CONFIRMED_SUPPLIER: "success",
+  RECEIVED: "success",
+  DELIVERED: "success",
+  GENERATED: "success",
+  ENABLED: "success",
+  CANCELLED: "cancelled",
+  REJECTED: "cancelled",
+  FAILED: "error",
+  PAYMENT_FAILED: "error",
+  DISPUTED: "error",
+  SUPPLIER_UNAVAILABLE: "error",
+  UNAVAILABLE: "error",
+  BOUNCED: "error",
+  COMPLAINED: "error",
+  ERROR: "error",
+  BLOCKED: "error",
+  DEAD: "error",
+  NEEDS_OWNER_APPROVAL: "warning",
+  CANCEL_REQUESTED: "warning",
+  UNKNOWN: "warning",
+  WARNING: "warning",
+  PARTIAL: "warning",
+  DELAYED: "warning",
+  OVERDUE: "warning",
+  QUOTE_READY: "info",
+  CUSTOMER_REVIEW: "info",
+  SENT: "info",
+  REFUNDED: "info",
+  PARTIAL_REFUND: "info",
+  REVIEW_REQUESTED: "info",
+  AMENDED: "info",
+  INFO: "info",
+  NEW: "info",
+  PENDING: "pending",
+  PENDING_PAYMENT: "pending",
+  CREATED: "pending",
+  WAITING: "pending",
+  CONTRACT_PENDING: "pending",
+  REFUND_PENDING: "pending",
+  REQUESTED: "pending",
+  AWAITING: "pending",
+  QUEUED: "pending",
+  INTERNAL_REVIEW: "in-progress",
+  SUPPLIER_CONFIRMATION: "in-progress",
+  PREPARATION: "in-progress",
+  IN_PROGRESS: "in-progress",
+  PROCESSING: "in-progress",
+  IN_REVIEW: "in-progress",
+  SENDING: "in-progress",
+  SUBMITTING: "in-progress",
+  DRAFT: "inactive",
+  EXPIRED: "inactive",
+  ARCHIVED: "inactive",
+  INACTIVE: "inactive",
+  DISABLED: "inactive",
+  MUTED: "inactive",
+};
+const STATUS_TONE_ICON: Record<string, any> = {
+  completed: CheckCircle2,
+  success: Check,
+  error: XCircle,
+  cancelled: Ban,
+  warning: AlertTriangle,
+  info: Info,
+  pending: Clock,
+  "in-progress": RefreshCw,
+  inactive: Archive,
+};
+function Badge({ status, tone, children }: any) {
+  const key = String(status || "").toUpperCase();
+  const resolved = tone || BADGE_STATUS_MAP[key] || "pending";
+  const Icon = STATUS_TONE_ICON[resolved] || Clock;
   return (
-    <span className={"badge " + (good ? "good" : bad ? "bad" : "warm")}>
-      {good ? <Check size={12} /> : <Clock size={12} />}{" "}
-      {children || labels[status] || status}
+    <span className={`badge badge-${resolved}`}>
+      <Icon size={13} className="badge-icon" aria-hidden="true" />
+      <span>{children ?? labels[status] ?? status}</span>
     </span>
   );
+}
+function StatusAlert({
+  tone = "info",
+  title,
+  children,
+  action,
+  className = "",
+  role,
+}: any) {
+  const Icon = STATUS_TONE_ICON[tone] || Info;
+  return (
+    <div
+      className={`status-alert status-alert--${tone} ${className}`.trim()}
+      role={role || (tone === "error" || tone === "warning" ? "alert" : "status")}
+    >
+      <div className="status-alert__main">
+        <Icon size={18} className="status-alert__icon" aria-hidden="true" />
+        <div className="status-alert__content">
+          {title ? <strong>{title}</strong> : null}
+          <div>{children}</div>
+        </div>
+      </div>
+      {action ? <div className="status-alert__actions">{action}</div> : null}
+    </div>
+  );
+}
+function resolveToastState(raw: any): { message: string; tone: string } {
+  if (raw && typeof raw === "object" && "message" in raw) {
+    return { message: String(raw.message || ""), tone: raw.tone || "info" };
+  }
+  const msg = String(raw || "");
+  if (/تعذر|فشل|خطأ|غير متاح|لا يمكن|غير مخول|غير صحيح|مرفوض|مشكلة|انقضت|انتهت/.test(msg)) {
+    return { message: msg, tone: "error" };
+  }
+  if (/تحذير|انتبه|مطلوب|غير محفوظ|بانتظار|تنبيه/.test(msg)) {
+    return { message: msg, tone: "warning" };
+  }
+  if (/أُعيد|إشعار|تجريبي|معاينة/.test(msg)) {
+    return { message: msg, tone: "info" };
+  }
+  return { message: msg, tone: "success" };
+}
+function inferModalTone(action?: string, title?: string, explicitTone?: string) {
+  if (explicitTone) return explicitTone;
+  const src = `${action || ""} ${title || ""}`.toUpperCase();
+  if (/CANCEL|REJECT|DISPUTE|REFUND|DELETE|DISABLE|RETIRE/.test(src) || /إلغاء|رفض|حذف|استرداد|تعليق|نزاع|تعطيل/.test(title || "")) {
+    return "danger";
+  }
+  if (/REQUEST_CHANGES|HOLD|RESTORE|REVIEW/.test(src) || /مراجعة|إعادة|تنبيه|تحذير/.test(title || "")) {
+    return "warn";
+  }
+  if (/APPROVE|CONFIRM|COMPLETE|SIGN|VERIFY|FEEDBACK/.test(src) || /اعتماد|تأكيد|إتمام|توقيع|موافقة/.test(title || "")) {
+    return "success";
+  }
+  return "info";
 }
 function Field({ label, children, hint }: any) {
   return (
@@ -387,7 +535,7 @@ function App() {
       if (message) setToast(message);
       return next;
     } catch (e: any) {
-      setToast(e.message);
+      setToast({ message: e.message, tone: "error" } as any);
       return null;
     } finally {
       setBusy(false);
@@ -448,12 +596,13 @@ function App() {
         path.startsWith(p + "/") ||
         (p.endsWith("/") && path.startsWith(p)),
     );
+  const contentPreview = window.parent !== window && new URLSearchParams(location.search).has("contentPreview");
   const denied =
     (!isDemo && isSupplier) ||
     (isAdmin && !["admin", "staff"].includes(role)) ||
     (isSupplier && role !== "supplier") ||
     (isCustomer && !signedIn) ||
-    (!canPlan && /^\/(planner|cart|dashboard|favorites|checkout|payment-result)(\/|$)/.test(path));
+    (!canPlan && !(contentPreview && ["/cart","/planner"].includes(path)) && /^\/(planner|cart|dashboard|favorites|checkout|payment-result)(\/|$)/.test(path));
   const adminWorkspace = isAdmin && !denied;
   let content: any;
   const shared = { s, act, ask, busy, setToast, setModal, signOut, signingOut };
@@ -736,17 +885,27 @@ function App() {
           </Link>
         ))}
       </nav>}
-      {toast && (
-        <div className="toast" role="status">
-          <CheckCircle2 size={19} />
-          {toast}
-          <button onClick={() => setToast("")} aria-label="إغلاق التنبيه">
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      {toast && (() => {
+        const t = resolveToastState(toast);
+        const TIcon = STATUS_TONE_ICON[t.tone] || CheckCircle2;
+        return (
+          <div className={`toast toast--${t.tone}`} role="status">
+            <span className="toast__icon" aria-hidden="true">
+              <TIcon size={16} />
+            </span>
+            <span className="toast__msg">{t.message}</span>
+            <button onClick={() => setToast("")} aria-label="إغلاق التنبيه">
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })()}
 
-      {modal && (
+      {modal && (() => {
+        const mTone = inferModalTone(modal.action, modal.title, modal.tone);
+        const MIcon = mTone === "danger" ? AlertTriangle : mTone === "warn" ? AlertTriangle : mTone === "success" ? CheckCircle2 : ShieldCheck;
+        const submitIntent = mTone === "danger" ? "danger" : mTone === "warn" ? "warn" : mTone === "success" ? "success" : "primary";
+        return (
         <div
           className="modal-backdrop"
           onMouseDown={(e) => {
@@ -754,16 +913,21 @@ function App() {
           }}
         >
           <section
-            className="modal"
+            className={`modal modal--${mTone}`}
             role="dialog"
             aria-modal="true"
             aria-label={modal.title}
           >
             <div className="modal-heading">
-              <h2>{modal.title}</h2>
+              <div className="modal-head-title">
+                <span className="modal-tone-badge" aria-hidden="true">
+                  <MIcon size={18} />
+                </span>
+                <h2>{modal.title}</h2>
+              </div>
               <button
                 aria-label="إغلاق النافذة"
-                className="icon-btn"
+                className="icon-btn intent-info"
                 onClick={() => setModal(null)}
               >
                 <X />
@@ -792,11 +956,11 @@ function App() {
                 <Field label={modal.label}>
                   <textarea name="reason" required minLength={3} rows={4} />
                 </Field>
-                <div className="info">
-                  <ShieldCheck size={19} />
+                <div className="info modal-callout">
+                  <MIcon size={19} aria-hidden="true" />
                   سيتم حفظ الإجراء في سجل العملية وإبلاغ الأطراف المعنية.
                 </div>
-                <Btn type="submit" disabled={busy}>
+                <Btn type="submit" intent={submitIntent} loading={busy}>
                   تأكيد الإجراء
                   <Check size={17} />
                 </Btn>
@@ -804,7 +968,8 @@ function App() {
             )}
           </section>
         </div>
-      )}
+        );
+      })()}
     </>
   );
 }
@@ -877,13 +1042,16 @@ function Footer() {
     </footer>
   );
 }
+function safeContentLink(value: string) {
+  return /^\/(?![\/\\])[^\\\x00-\x20]*$/.test(value) ? value : "/planner";
+}
 function Hero({ title, sub, text, home = false, canPlan = true }: any) {
   const contentText = useContent();
   const link = contentText("home.hero.link","/planner");
   const target = /^\/(?![\/\\])/.test(link) && !link.includes("\\") ? link : "/planner";
   return (
     <section className={"hero " + (home ? "home-hero" : "")}>
-      <div className="hero-image" style={home && /^\/assets\/[a-z0-9_./-]+\.(jpg|jpeg|png|webp)$/i.test(contentText("home.hero.image","")) ? {backgroundImage:`url("${contentText("home.hero.image","")}")`} : undefined} />
+      <div className="hero-image" style={home && contentImage(contentText("home.hero.image",""),"") ? {backgroundImage:`url("${contentImage(contentText("home.hero.image",""),"")}")`} : undefined} />
       <div className="hero-shade" />
       <div className="container hero-content">
         <span className="eyebrow">
@@ -1021,32 +1189,27 @@ function Home({ s }: any) {
     "hall",
     "table",
   ];
-  return (
-    <>
-      <Hero
-        home
-        canPlan={!s.session || s.session.role === "customer"}
-        title={contentText("home.hero.title","يا هلا ومسهلا.. زارتنا البركة")}
-        sub={contentText("home.hero.subtitle","كل مناسبة تبيّض الوجه.. تبدي من هني")}
-        text={`من ليالي العمر وأفراح الأهل لي عزائم الديوانية والجمعات الطيبة، نزهّب لكم كل التفاصيل على أصولها.. استريحوا وخلو الباقي على سنع ${brand} وفالكم طيب.`}
-      />
-      {(!s.session || new URLSearchParams(location.search).has("contentPreview")) && contentText("home.welcome.visible","true") !== "false" && <section className="container welcome-path" aria-labelledby="welcome-path-title">
+  const order = contentText("home.sections.order",homeSections.join(",")).split(",");
+  const sectionOrder = order.length === homeSections.length && new Set(order).size === order.length &&
+    order.every(key=>homeSections.includes(key)) ? order : homeSections;
+  const sections = {
+    welcome: (!s.session || new URLSearchParams(location.search).has("contentPreview")) && contentText("home.welcome.visible","true") !== "false" && <section className="container welcome-path" aria-labelledby="welcome-path-title">
         <div>
           <span className="eyebrow">أول مرة ويانا؟</span>
           <h2 id="welcome-path-title">{contentText("home.welcome.title","خلّ مناسبتكم تمشي على سنع")}</h2>
           <p>{contentText("home.welcome.text","خذوا فكرة عن الخدمات، اختاروا اللي يناسبكم، واحفظوا تجهيزاتكم بحسابكم علشان تردّون لها بأي وقت.")}</p>
         </div>
         <div className="button-row">
-          <Btn to="/auth/register?next=%2Fplanner">افتحوا حساب وابدوا <ArrowLeft size={17} /></Btn>
+          <Btn to="/auth/register?next=%2Fplanner">{contentText("home.welcome.cta","افتحوا حساب وابدوا")} <ArrowLeft size={17} /></Btn>
           <Btn to="/auth/login" variant="outline">عندكم حساب؟</Btn>
           <Link to="/services" className="text-link">أبي أتصفّح أول</Link>
         </div>
-      </section>}
-      <PromoFilmCard />
-      <section className="container occasions-section">
+      </section>,
+    promo: <PromoFilmCard />,
+    occasions: <section className="container occasions-section">
         <SectionTitle
-          title="نقوة مناسباتنا"
-          sub="عسى دياركم دوم عامرة بالأفراح والمسرات.. نقّوا مناسبتكم وخلو الباقي علينا"
+          title={contentText("home.occasions.title","نقوة مناسباتنا")}
+          sub={contentText("home.occasions.text","عسى دياركم دوم عامرة بالأفراح والمسرات.. نقّوا مناسبتكم وخلو الباقي علينا")}
         />
         <div className="occasion-grid">
           {[0, 4, 3, 2, 6, 7].map((i) => (
@@ -1068,12 +1231,12 @@ function Home({ s }: any) {
             </Link>
           ))}
         </div>
-      </section>
-      <section className="audience-section">
+      </section>,
+    audience: <section className="audience-section">
         <div className="container">
           <SectionTitle
-            title="لمن ودّكم نزهّب المناسبة؟"
-            sub="خدمات مفصّلة على سنقة عشرة ترضي كل الأذواق"
+            title={contentText("home.audience.title","لمن ودّكم نزهّب المناسبة؟")}
+            sub={contentText("home.audience.text","خدمات مفصّلة على سنقة عشرة ترضي كل الأذواق")}
           />
           <div className="grid three">
             {[
@@ -1114,11 +1277,11 @@ function Home({ s }: any) {
             ))}
           </div>
         </div>
-      </section>
-      <section className="container section">
+      </section>,
+    packages: <section className="container section">
         <SectionTitle
-          title="باقاتنا المزهّبة"
-          sub="باقات جاهزة متكاملة من نقوة خدمات الكويت لأحلى الليالي"
+          title={contentText("home.packages.title","باقاتنا المزهّبة")}
+          sub={contentText("home.packages.text","باقات جاهزة متكاملة من نقوة خدمات الكويت لأحلى الليالي")}
           to="/packages"
           action="شوفوا كل الباقات"
         />
@@ -1127,12 +1290,12 @@ function Home({ s }: any) {
             <PackageCard key={p.id} pack={p} />
           ))}
         </div>
-      </section>
-      <section className="how-section">
+      </section>,
+    steps: <section className="how-section">
         <div className="container">
           <SectionTitle
-            title="شلون نزهّب مناسبتكم خطوة بخطوة؟"
-            sub="رحلة سهلة ومريحة من أول فكرة لين تكتمل فرحتكم على خير"
+            title={contentText("home.steps.title","شلون نزهّب مناسبتكم خطوة بخطوة؟")}
+            sub={contentText("home.steps.text","رحلة سهلة ومريحة من أول فكرة لين تكتمل فرحتكم على خير")}
           />
           <div className="steps how-steps">
             {[
@@ -1163,11 +1326,11 @@ function Home({ s }: any) {
             ))}
           </div>
         </div>
-      </section>
-      <section className="container section">
+      </section>,
+    reviews: <section className="container section">
         <SectionTitle
-          title="حچيكم الطيب.. يفرّح القلب وتاج على راسنا"
-          sub="ذكريات حلوة وشهادات غالية من أهلنا وحبايبنا بالكويت"
+          title={contentText("home.reviews.title","حچيكم الطيب.. يفرّح القلب وتاج على راسنا")}
+          sub={contentText("home.reviews.text","ذكريات حلوة وشهادات غالية من أهلنا وحبايبنا بالكويت")}
         />
         <div className="grid three testimonials">
           {[
@@ -1192,20 +1355,32 @@ function Home({ s }: any) {
             </article>
           ))}
         </div>
-      </section>
-      <section className="container final-banner">
+      </section>,
+    banner: <section className="container final-banner">
         <Flower2 size={52} strokeWidth={0.8} />
         <div>
-          <h2>مناسبتكم تستاهل كل السنع والذرابة</h2>
+          <h2>{contentText("home.banner.title","مناسبتكم تستاهل كل السنع والذرابة")}</h2>
           <p>
-            خلّوا العبالة والتجهيز علينا، استريحوا وعيشوا اللحظة وفالكم طيب.
+            {contentText("home.banner.text","خلّوا العبالة والتجهيز علينا، استريحوا وعيشوا اللحظة وفالكم طيب.")}
           </p>
         </div>
-        <Btn to="/planner">
-          ودّكم نبدي نزهّب؟
+        <Btn to={safeContentLink(contentText("home.banner.link","/planner"))}>
+          {contentText("home.banner.cta","ودّكم نبدي نزهّب؟")}
           <ArrowLeft size={17} />
         </Btn>
-      </section>
+      </section>,
+  };
+  return (
+    <>
+      <Hero
+        home
+        canPlan={!s.session || s.session.role === "customer"}
+        title={contentText("home.hero.title","يا هلا ومسهلا.. زارتنا البركة")}
+        sub={contentText("home.hero.subtitle","كل مناسبة تبيّض الوجه.. تبدي من هني")}
+        text={contentText("home.hero.text",`من ليالي العمر وأفراح الأهل لي عزائم الديوانية والجمعات الطيبة، نزهّب لكم كل التفاصيل على أصولها.. استريحوا وخلو الباقي على سنع ${brand} وفالكم طيب.`)}
+      />
+      {sectionOrder.map(key=>contentText("home."+key+".visible","true") === "false" ? null :
+        <React.Fragment key={key}>{sections[key]}</React.Fragment>)}
     </>
   );
 }
@@ -1497,11 +1672,17 @@ function Detail({ s, act, path, setModal }: any) {
       (x) => x.id === path.split("/")[2],
     ),
     [guests, setGuests] = useState(item?.capacity || 100),
-    [color, setColor] = useState("أبيض ملكي"),
+    [color, setColor] = useState(item?.configuration?.options?.[0]?.name || "أبيض ملكي"),
+    [extras,setExtras] = useState<string[]>([]),
     [tab, setTab] = useState(0),
     [qty, setQty] = useState(1),
     [photo, setPhoto] = useState(0),
     [notes, setNotes] = useState("");
+  useEffect(() => {
+    if (!item?.id) return;
+    setGuests(item.capacity || 100);
+    setColor(item.configuration?.options?.[0]?.name || "أبيض ملكي");
+  },[item?.id]);
   if (!item)
     return (
       <Empty
@@ -1509,10 +1690,13 @@ function Detail({ s, act, path, setModal }: any) {
         text="تقدرون تتصفحون باقي نقواتنا من الخدمات والباقات."
       />
     );
+  const existingPackage = isPackage && s.cart.some(line=>packageIdOf(line) === item.id);
   let photos = [item.image, "flowers", "table", "wedding", "hall"];
-  let price = isPackage
-    ? item.price * (guests / (item.capacity || 100))
-    : item.price;
+  let price = item.price, packageError = "";
+  if (isPackage) {
+    try { price = pricePackage(item,s.services,guests,color,extras).total; }
+    catch(error) { packageError = error.message; }
+  }
   return (
     <div className="container detail-page">
       <div className="breadcrumb">
@@ -1627,7 +1811,9 @@ function Detail({ s, act, path, setModal }: any) {
       <div className="detail-options">
         <section className="card">
           <h3>الخيارات الرئيسية</h3>
-          <Field label="عدد الضيوف المعازيم">
+          {isPackage && item.configuration ? <Field label="عدد الضيوف المعازيم">
+            <input type="number" min={item.configuration.minGuests} max={item.configuration.maxGuests} value={guests} onChange={event=>setGuests(Number(event.target.value))}/>
+          </Field> : <Field label="عدد الضيوف المعازيم">
             <div className="choice-row">
               {[50, 100, 200, 300].map((n) => (
                 <button
@@ -1639,8 +1825,12 @@ function Detail({ s, act, path, setModal }: any) {
                 </button>
               ))}
             </div>
-          </Field>
-          <Field label="ألوان وتنسيق المناسبة">
+          </Field>}
+          {isPackage && item.configuration?.options.length ? <Field label="خيار الباقة">
+            <select value={color} onChange={event=>setColor(event.target.value)}>
+              {item.configuration.options.map(option=><option key={option.name}>{option.name}</option>)}
+            </select>
+          </Field> : <Field label="ألوان وتنسيق المناسبة">
             <div className="swatches">
               {[
                 "أبيض ملكي",
@@ -1670,7 +1860,17 @@ function Detail({ s, act, path, setModal }: any) {
                 </button>
               ))}
             </div>
-          </Field>
+          </Field>}
+          {isPackage && !!item.configuration?.extraServiceIds.length && <fieldset>
+            <legend>خدمات إضافية</legend>
+            {s.services.filter(service=>item.configuration.extraServiceIds.includes(service.id)).map(service=>
+              <label className="check-label" key={service.id}>
+                <input type="checkbox" checked={extras.includes(service.id)} onChange={event=>setExtras(
+                  event.target.checked ? [...extras,service.id] : extras.filter(id=>id!==service.id)
+                )}/>{service.title} · {money(service.price)}
+              </label>
+            )}
+          </fieldset>}
         </section>
         <section className="card">
           <h3>
@@ -1717,6 +1917,7 @@ function Detail({ s, act, path, setModal }: any) {
         <aside className="card booking-card">
           <h3>احجزوا هـ{isPackage ? "الباقة السنعة" : "الخدمة السنعة"}</h3>
           <Price value={price * qty} />
+          {packageError && <p role="status" className="warning">{packageError}</p>}
           {!isPackage && <Field label="الكمية">
             <Counter value={qty} onChange={setQty} />
           </Field>}
@@ -1729,10 +1930,11 @@ function Detail({ s, act, path, setModal }: any) {
             />
           </Field>
           <Btn
-            disabled={false}
+            disabled={Boolean(packageError)}
             onClick={async () => {
+              if (existingPackage) {go("/cart");return;}
               const added = isPackage
-                ? await act("CART_PACKAGE", { id: item.id, guests, option: color }, "")
+                ? await act("CART_PACKAGE", { id: item.id, guests, option: color, extras }, "")
                 : await act("CART_ADD", { id: item.id, qty, option: color }, "");
               if (!added) return;
               await act(
@@ -1743,7 +1945,7 @@ function Detail({ s, act, path, setModal }: any) {
               go("/cart");
             }}
           >
-            أضيفوها لسلة مناسبتكم
+            {existingPackage ? "الباقة في السلة · عرض السلة" : "أضيفوها لسلة مناسبتكم"}
             <ShoppingBag size={17} />
           </Btn>
           <small>
@@ -2100,6 +2302,7 @@ function Auth({ s, act, path, setToast }: any) {
   );
 }
 function Planner({ s, act, setToast }: any) {
+  const contentText = useContent();
   const brand = branding(s.settings).name || "المنصة";
   const p = s.planner,
     [error, setError] = useState("");
@@ -2138,7 +2341,7 @@ function Planner({ s, act, setToast }: any) {
   return (
     <>
       <Hero
-        title="زهّبوا مناسبتكم"
+        title={contentText("booking.planner.title","زهّبوا مناسبتكم")}
         sub="نحو لحظات تبيّض الوجه.. بخطوات بسيطة وسنعة"
         text="خلونا نساعدكم بتجهيز مناسبتكم على الأصول. ننقّي وياكم كل التفاصيل عشان تطلع ليلتكم سنعة وترفع الراس وفالكم طيب."
       />
@@ -2605,7 +2808,7 @@ function Cart({ s, act, busy }: any) {
                   go("/request-review");
               }}
             >
-              {s.session ? contentText("booking.cart.submit","إرسال الطلب للمراجعة") : "سجّلوا الدخول لإرسال الطلب"}
+              {s.session ? contentText("booking.cart.submit","إرسال الطلب للمراجعة") : contentText("booking.cart.guest","سجّلوا الدخول لإرسال الطلب")}
               <Send size={17} />
             </Btn>
             <small className="secure">
@@ -3111,28 +3314,34 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
               <Btn
                 variant="outline"
                 onClick={() =>
-                  exportFile(
-                    "quote-" + id + ".html",
-                    demoDocumentHeading(s.settings, "عرض السعر") + ' — ' +
-                      id +
-                      "</h1><p>" +
-                      o.customer +
-                      "</p>" +
-                      o.lines
-                        .map(
-                          (l) =>
-                            "<p>" +
-                            l.title +
-                            " — " +
-                            money(l.price * l.qty) +
-                            " د.ك</p>",
-                        )
-                        .join("") +
-                      "<h2>الإجمالي " +
-                      money(totals.total) +
-                      " د.ك</h2></html>",
-                    "text/html",
-                  )
+                  (() => {
+                    const b = branding(s.settings);
+                    const [arTitle, ...restTitle] = String(b.title || "").split("|").map((x) => x.trim()).filter(Boolean);
+                    exportFile(
+                      "quote-" + id + ".html",
+                      renderUnifiedDocument({
+                        title: `عرض السعر — ${id}`,
+                        docType: "عروض الأسعار",
+                        reference: id,
+                        status: o.status,
+                        statusLabel: labels[o.status] || o.status,
+                        brandTitle: arTitle || "هَبّ السعد",
+                        subtitle: restTitle.join(" | "),
+                        brandHTML: b.logo ? `<img src="${escapeDocHTML(b.logo)}" alt="" style="height:74px;max-width:150px;object-fit:contain">` : "",
+                        meta: [
+                          { label: "العميل", value: o.customer },
+                          { label: "تاريخ المناسبة", value: o.occasion?.date || "" },
+                          { label: "إصدار العرض", value: o.version },
+                        ],
+                        tableHeaders: ["الخدمة", "الكمية", "السعر د.ك", "الإجمالي د.ك"],
+                        numericColumns: [1, 2, 3],
+                        tableRows: o.lines.map((l: any) => [l.title, l.qty, money(l.price), money(l.price * l.qty)]),
+                        summaryItems: [{ label: "الإجمالي", value: `${money(totals.total)} د.ك`, emphasize: true }],
+                        footerText: "عرض سعر صادر من منصة هَبّ السعد · جميع المبالغ بالدينار الكويتي (د.ك).",
+                      }),
+                      "text/html",
+                    );
+                  })()
                 }
               >
                 <Download size={15} />
@@ -3597,19 +3806,35 @@ function Checkout({ s, act, id, result, setModal }: any) {
             <Btn
               variant="outline"
               onClick={() =>
-                exportFile(
-                  last.receipt + ".html",
-                  demoDocumentHeading(s.settings, "إيصال تجريبي") + '</h1><p>' +
-                    last.receipt +
-                    "</p><p>" +
-                    money(last.amount) +
-                    " د.ك</p><p>" +
-                    last.method +
-                    " — " +
-                    last.at +
-                    "</p></html>",
-                  "text/html",
-                )
+                (() => {
+                  const b = branding(s.settings);
+                  const [arTitle, ...restTitle] = String(b.title || "").split("|").map((x) => x.trim()).filter(Boolean);
+                  exportFile(
+                    last.receipt + ".html",
+                    renderUnifiedDocument({
+                      title: "إيصال دفع",
+                      docType: "المستندات المالية",
+                      reference: last.receipt,
+                      status: last.status,
+                      statusLabel: labels[last.status] || last.status,
+                      brandTitle: arTitle || "هَبّ السعد",
+                      subtitle: restTitle.join(" | "),
+                      brandHTML: b.logo ? `<img src="${escapeDocHTML(b.logo)}" alt="" style="height:74px;max-width:150px;object-fit:contain">` : "",
+                      meta: [
+                        { label: "رقم الإيصال", value: last.receipt },
+                        { label: "رقم الحجز", value: o.id },
+                        { label: "وسيلة الدفع", value: last.method },
+                        { label: "التاريخ", value: last.at },
+                      ],
+                      tableHeaders: ["البيان", "المبلغ د.ك"],
+                      numericColumns: [1],
+                      tableRows: [[`دفعة للحجز ${o.id}`, money(last.amount)]],
+                      summaryItems: [{ label: "المبلغ المدفوع", value: `${money(last.amount)} د.ك`, emphasize: true }],
+                      footerText: "إيصال تحصيل رسمي صادر من منصة هَبّ السعد · جميع المبالغ بالدينار الكويتي (د.ك).",
+                    }),
+                    "text/html",
+                  );
+                })()
               }
             >
               <Download size={17} />
@@ -4087,6 +4312,7 @@ export {
   Link,
   Price,
   Badge,
+  StatusAlert,
   Field,
   Empty,
   SectionTitle,

@@ -15,7 +15,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY server ./server
-COPY src/domain.mjs src/money.mjs src/branding.mjs src/staff-permissions.mjs src/content-fields.mjs ./src/
+COPY src/domain.mjs src/money.mjs src/branding.mjs src/staff-permissions.mjs src/content-fields.mjs src/document-layout.mjs src/excel-export.mjs ./src/
 RUN command -v setpriv && mkdir -p /app/data/uploads && chown -R node:node /app/data
 USER node
 EXPOSE 3001

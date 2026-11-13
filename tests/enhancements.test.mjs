@@ -1,7 +1,12 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+const testStorage = await mkdtemp(join(tmpdir(),"habb-enhancement-"));
+process.env.STORAGE_DIR = testStorage;
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = "pglite:memory";
 process.env.ENABLE_DEMO = "true";
@@ -13,16 +18,16 @@ const { createApp } = await import("../server/app.mjs");
 await migrate();
 await seedDemo();
 const app = await createApp({ logger:false });
-after(async () => { await app.close(); await db.pool.end(); });
+after(async () => { await app.close(); await db.pool.end(); await rm(testStorage,{recursive:true,force:true}); });
 const origin = "http://localhost:5173";
 
 async function browser(role) {
   const cookies = new Map();
   let csrf;
-  async function call(method,url,payload) {
+  async function call(method,url,payload,extraHeaders={}) {
     const response = await app.inject({method,url,payload,headers:{
       origin, "x-csrf-token":csrf || "", "idempotency-key":randomUUID(),
-      cookie:[...cookies].map(([key,value])=>key+"="+value).join("; "),
+      cookie:[...cookies].map(([key,value])=>key+"="+value).join("; "), ...extraHeaders,
     }});
     for (const cookie of response.cookies) {
       if (cookie.value) cookies.set(cookie.name,cookie.value);
@@ -34,7 +39,7 @@ async function browser(role) {
   }
   await call("GET","/api/auth/session");
   if (role) assert.equal((await call("POST","/api/auth/login",{email:role+"@demo.kw",password:process.env.DEV_DEMO_PASSWORD})).status,200);
-  return { get:url=>call("GET",url), post:(url,data)=>call("POST",url,data), command:(action,payload={})=>call("POST","/api/commands",{action,payload}) };
+  return { get:url=>call("GET",url), post:(url,data,headers)=>call("POST",url,data,headers), command:(action,payload={})=>call("POST","/api/commands",{action,payload}) };
 }
 
 test("guest plans and keeps one configured package after registration",async()=>{
@@ -139,4 +144,52 @@ test("expenses, purchase order and CMS writes are linked and audited",async()=>{
   const generated=(await db.query("SELECT * FROM admin_expenses WHERE recurring_from=$1",[template.body.id])).rows;
   assert.equal(generated.length,1);
   assert.equal(Number(generated[0].paid_minor),0);
+});
+
+test("package options use server pricing and reject invalid customization", async()=>{
+  const owner=await browser("admin");
+  const guest=await browser();
+  const state=(await owner.get("/api/state")).body;
+  const pack=state.packages.find(item=>item.id==="p1");
+  const extra=state.services.find(item=>!pack.serviceIds.includes(item.id));
+  const saved=await owner.command("PACKAGE_SAVE",{
+    id:pack.id,title:pack.title,price:250,capacity:100,serviceIds:pack.serviceIds,
+    configuration:{minGuests:50,maxGuests:150,pricing:"fixed",options:[{name:"مميز",surcharge:25}],extraServiceIds:[extra.id]},
+  });
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal((await guest.command("CART_PACKAGE",{id:pack.id,guests:20,option:"مميز"})).status,409);
+  assert.equal((await guest.command("CART_PACKAGE",{id:pack.id,guests:100,option:"وهمي"})).status,409);
+  const added=await guest.command("CART_PACKAGE",{id:pack.id,guests:100,option:"مميز",extras:[extra.id]});
+  assert.equal(added.status,200,JSON.stringify(added.body));
+  assert.equal(Math.round(added.body.cart.reduce((sum,line)=>sum+line.price,0)*1000),Math.round((275+extra.price)*1000));
+  assert.ok(added.body.cart.every(line=>line.qty===1));
+});
+
+test("content ordering rejects invalid values and media requires publication", async()=>{
+  const owner=await browser("admin");
+  const guest=await browser();
+  const key="home.sections.order";
+  const valid="banner,welcome,promo,occasions,audience,packages,steps,reviews";
+  assert.equal((await owner.post("/api/backoffice/content/"+key,{action:"draft",value:"banner,banner"})).status,400);
+  const draft=await owner.post("/api/backoffice/content/"+key,{action:"draft",value:valid});
+  assert.equal(draft.status,200);
+  assert.equal((await owner.post("/api/backoffice/content/"+key,{action:"publish",id:draft.body.id})).status,200);
+  assert.equal((await guest.get("/api/content")).body[key],valid);
+  assert.equal((await guest.get("/api/content-media/00000000-0000-0000-0000-000000000001.png")).status,404);
+  assert.equal((await owner.post("/api/backoffice/content/home.hero.image",{action:"draft",value:"/api/content-media/00000000-0000-0000-0000-000000000001.png"})).status,400);
+  const boundary="habb-"+randomUUID();
+  const payload=Buffer.concat([
+    Buffer.from("--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"example.png\"\r\nContent-Type: image/png\r\n\r\n"),
+    Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK1sAAAAASUVORK5CYII=","base64"),
+    Buffer.from("\r\n--"+boundary+"--\r\n"),
+  ]);
+  const media=await owner.post("/api/backoffice/content-media",payload,{"content-type":"multipart/form-data; boundary="+boundary});
+  assert.equal(media.status,200,JSON.stringify(media.body));
+  assert.equal((await guest.get(media.body.path)).status,404);
+  assert.equal((await owner.get(media.body.path)).status,200);
+  const image=await owner.post("/api/backoffice/content/home.hero.image",{action:"draft",value:media.body.path});
+  assert.equal(image.status,200);
+  assert.equal((await owner.post("/api/backoffice/content/home.hero.image",{action:"publish",id:image.body.id})).status,200);
+  assert.equal((await guest.get(media.body.path)).status,200);
+
 });

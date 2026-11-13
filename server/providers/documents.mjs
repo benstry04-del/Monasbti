@@ -1,22 +1,21 @@
 import { readFileSync } from "node:fs";
 import { branding, logoDefaults } from "../../src/branding.mjs";
+import { escapeHTML, renderUnifiedDocument } from "../../src/document-layout.mjs";
+import { labels } from "../../src/domain.mjs";
 import { createHash } from "node:crypto";
-export const escapeHTML = (value) =>
-  String(value ?? "").replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ],
-  );
+
+export { escapeHTML };
+
 export function brandSnapshot(settings) {
   const identity = branding(settings);
   return { title: identity.title, logo: identity.logo };
 }
+
 export async function currentBrand(db) {
   const row = (await db.query("SELECT data FROM app_settings WHERE id=true")).rows[0]?.data;
   return branding(row?.settings || row);
 }
+
 let originalDocumentLogo;
 export function documentBrandHTML(identity) {
   let logo = identity.logo;
@@ -34,16 +33,149 @@ export function documentBrandHTML(identity) {
     }
     logo = originalDocumentLogo;
   }
-  return logo ? '<img src="' + escapeHTML(logo) + '" alt="" style="height:80px;object-fit:contain">' : '';
+  return logo ? '<img src="' + escapeHTML(logo) + '" alt="" style="height:74px;max-width:150px;object-fit:contain">' : "";
 }
+
+function splitBrandParts(title) {
+  if (!title) return { ar: "", en: "" };
+  const parts = String(title).split("|").map((s) => s.trim()).filter(Boolean);
+  return { ar: parts[0] || "", en: parts.slice(1).join(" | ") };
+}
+
 export function contractHTML(booking, contract, settings) {
   const data = contract.data || contract;
   data.terms ||= data.clauses;
   const identity = data.branding || brandSnapshot(settings);
   const company = data.company || booking.data?.contract?.company || {};
   const lines = data.snapshot || data.lines || booking.data?.lines || [];
-  return `<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>وثيقة المناسبة ${escapeHTML(booking.id)}</title><style>body{font-family:Arial,sans-serif;max-width:900px;margin:40px auto;padding:24px;color:#4b0d1d;line-height:1.9}h1{font-weight:500}table{border-collapse:collapse;width:100%}td,th{padding:12px;border:1px solid #d1a385}small{color:#6f2b33}@media print{body{margin:0}}</style>${documentBrandHTML(identity)}${identity.title ? "<h1>" + escapeHTML(identity.title) + "</h1>" : ""}<p>الجهة المتعاقدة: ${escapeHTML(company.name)} · رقم التسجيل: ${escapeHTML(company.registrationNumber)}</p><h2>${data.kind === "AMENDMENT" ? "ملحق تعديل عقد تنظيم مناسبة" : "عقد تنظيم مناسبة"}</h2><p>رقم الطلب: ${escapeHTML(booking.id)} · إصدار العقد: ${escapeHTML(contract.version || data.version || 1)}</p><p>العميل: ${escapeHTML(booking.data?.customer)} · التاريخ: ${escapeHTML(booking.data?.occasion?.date)}</p><table><thead><tr><th>الخدمة</th><th>الكمية</th><th>السعر د.ك</th></tr></thead><tbody>${lines.map((l) => `<tr><td>${escapeHTML(l.title)}</td><td>${escapeHTML(l.qty)}</td><td>${escapeHTML(Number(l.price || 0).toFixed(3))}</td></tr>`).join("")}</tbody></table><p>الإجمالي: ${escapeHTML(data.total)} د.ك</p><p>الشروط: ${escapeHTML(data.terms || "تطبق الشروط المعتمدة في نسخة العرض الموقعة وجدول الدفعات المسجل.")}</p><p>جدول الدفعات: ${escapeHTML((data.paymentSchedule || []).join("% / "))}%</p><p>حالة التوقيع: ${escapeHTML(contract.status || data.status)}</p><p>التوقيع: ${escapeHTML(data.signature || "بانتظار التوقيع")}</p><small>بصمة النسخة: ${escapeHTML(contract.document_hash || "")}. تحفظ موافقة المستخدم وتاريخ التوقيع وإصدار الوثيقة في سجل التدقيق. عند الحاجة لشهادة توقيع معتمدة يُربط مزود التوقيع الخارجي.</small></html>`;
+  const rawStatus = contract.status || data.status || "";
+  const docHeading =
+    data.kind === "AMENDMENT"
+      ? "ملحق تعديل عقد تنظيم مناسبة"
+      : data.kind === "QUOTE"
+        ? "عرض سعر تنظيم مناسبة"
+        : "عقد تنظيم مناسبة";
+  const brand = splitBrandParts(identity.title);
+
+  return renderUnifiedDocument({
+    title: `${docHeading} · ${booking.id}`,
+    docType: "الوثائق التعاقدية",
+    reference: `طلب ${booking.id} · v${contract.version || data.version || 1}`,
+    status: rawStatus,
+    statusLabel: labels[rawStatus] || rawStatus,
+    brandHTML: documentBrandHTML(identity),
+    brandTitle: brand.ar,
+    subtitle: brand.en,
+    meta: [
+      { label: "العميل", value: booking.data?.customer },
+      { label: "تاريخ المناسبة", value: booking.data?.occasion?.date },
+      { label: "الجهة المتعاقدة", value: company.name },
+      { label: "رقم التسجيل التجاري", value: company.registrationNumber },
+      { label: "رقم الطلب", value: booking.id },
+      { label: "إصدار الوثيقة", value: contract.version || data.version || 1 },
+    ],
+    tableHeaders: ["الخدمة", "الكمية", "السعر د.ك", "الإجمالي د.ك"],
+    numericColumns: [1, 2, 3],
+    tableRows: lines.map((l) => {
+      const qty = Number(l.qty || 1);
+      const unit = Number(l.price || 0);
+      return [l.title, qty, unit.toFixed(3), (unit * qty).toFixed(3)];
+    }),
+    summaryItems: [
+      { label: "الإجمالي", value: `${Number(data.total ?? 0).toFixed(3)} د.ك`, emphasize: true },
+      ...((data.paymentSchedule || []).length
+        ? [{ label: "جدول الدفعات", value: `${(data.paymentSchedule || []).join("% / ")}%` }]
+        : []),
+    ],
+    sections: [
+      {
+        title: "الشروط والأحكام",
+        body: data.terms || "تطبق الشروط المعتمدة في نسخة العرض الموقعة وجدول الدفعات المسجل.",
+      },
+      {
+        title: "التوقيع والاعتماد الإلكتروني",
+        body: `حالة التوقيع: ${labels[rawStatus] || rawStatus}\nالتوقيع: ${data.signature || "بانتظار التوقيع"}`,
+      },
+    ],
+    docHash: contract.document_hash || "",
+    footerText:
+      "بصمة النسخة: تحفظ موافقة المستخدم وتاريخ التوقيع وإصدار الوثيقة في سجل التدقيق. عند الحاجة لشهادة توقيع معتمدة يُربط مزود التوقيع الخارجي.",
+  });
 }
+
+export function receiptHTML({ payment, identity, rows }) {
+  const brand = splitBrandParts(identity.title);
+  const metaRows = rows.map(([label, value]) => ({ label, value }));
+  return renderUnifiedDocument({
+    title: "إيصال دفع موثّق",
+    docType: "المستندات المالية",
+    reference: payment.id,
+    status: payment.status,
+    statusLabel: labels[payment.status] || payment.status,
+    brandHTML: documentBrandHTML(identity),
+    brandTitle: brand.ar,
+    subtitle: brand.en,
+    meta: metaRows,
+    tableHeaders: ["البيان", "القيمة"],
+    tableRows: rows.map(([k, v]) => [k, v]),
+    summaryItems: [
+      { label: "المبلغ المحصّل", value: `${rows.find(([k]) => k === "المبلغ د.ك")?.[1] ?? "0.000"} د.ك`, emphasize: true },
+      ...(Number(payment.data?.refunded || 0) > 0
+        ? [{ label: "المسترد", value: `${payment.data.refunded} د.ك` }]
+        : []),
+    ],
+    footerText: "وثيقة تحصيل رسمية صادرة من النظام المالي للمنصة؛ كافة المبالغ بالدينار الكويتي (د.ك).",
+  });
+}
+
+const PROCUREMENT_LABELS = {
+  DRAFT: "مسودة",
+  SENT: "مرسل للمورد",
+  RECEIVED: "مستلم",
+  CANCELLED: "ملغي",
+};
+
+export function procurementHTML({ record, supplierName, identity, moneyFn }) {
+  const brand = splitBrandParts(identity.title);
+  const data = record.data || {};
+  const items = Array.isArray(data.items) ? data.items : [];
+  const totalMinor = Number(record.amount_minor || 0);
+  const paidMinor = Number(record.paid_minor || 0);
+
+  return renderUnifiedDocument({
+    title: `طلب توريد · ${record.id}`,
+    docType: "المشتريات والتوريد",
+    reference: record.id,
+    status: record.status,
+    statusLabel: PROCUREMENT_LABELS[record.status] || record.status,
+    brandHTML: documentBrandHTML(identity),
+    brandTitle: brand.ar,
+    subtitle: brand.en,
+    meta: [
+      { label: "المورد", value: supplierName || "—" },
+      { label: "تاريخ التسليم", value: data.date },
+      { label: "الحالة", value: PROCUREMENT_LABELS[record.status] || record.status },
+      { label: "مرجع الحجز", value: data.bookingId || "—" },
+      { label: "مرجع الفاتورة", value: data.invoice || "—" },
+      { label: "الإجمالي", value: `${moneyFn(totalMinor)} د.ك` },
+    ],
+    tableHeaders: ["الصنف", "الكمية", "تكلفة الوحدة (د.ك)", "الإجمالي (د.ك)"],
+    numericColumns: [1, 2, 3],
+    tableRows: items.map((item) => {
+      const qty = Number(item.quantity || 1);
+      const unitMinor = Number(item.unitCost || 0);
+      return [item.name, qty, moneyFn(unitMinor), moneyFn(unitMinor * qty)];
+    }),
+    summaryItems: [
+      { label: "إجمالي طلب التوريد", value: `${moneyFn(totalMinor)} د.ك`, emphasize: true },
+      { label: "المدفوع", value: `${moneyFn(paidMinor)} د.ك` },
+      { label: "المتبقي", value: `${moneyFn(Math.max(0, totalMinor - paidMinor))} د.ك` },
+    ],
+    sections: data.notes ? [{ title: "الملاحظات والشروط", body: data.notes }] : [],
+    footerText: "مستند طلب توريد صادر عن إدارة المشتريات · جميع التكاليف بالدينار الكويتي (د.ك).",
+  });
+}
+
 export const documentHash = (html) =>
   createHash("sha256").update(html).digest("hex");
 // External signing implementation: SignatureBridge in ./esignature.mjs.

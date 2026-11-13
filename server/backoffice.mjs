@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, stat, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { businessPDF } from "./providers/business-pdf.mjs";
-import { contentFields } from "../src/content-fields.mjs";
-import { escapeHTML } from "./providers/documents.mjs";
+import { contentFields, homeSections } from "../src/content-fields.mjs";
+import { brandSnapshot, procurementHTML } from "./providers/documents.mjs";
 import { z } from "zod";
 import { httpError } from "./security.mjs";
 import { hasPermission, staffPermissionLabels } from "../src/staff-permissions.mjs";
@@ -32,6 +36,18 @@ const resourceTypes = {
   procurement: { table: "purchase_orders", schema: purchaseInput, date: "delivery_date", state: "status" },
 };
 const contentKey = z.string().regex(/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,4}$/).max(150);
+const mediaExtensions = {"image/jpeg":"jpg","image/png":"png","image/webp":"webp","video/mp4":"mp4","video/webm":"webm"};
+const mediaName = /^[a-f0-9-]{36}\.(jpg|png|webp|mp4|webm)$/;
+const mediaRoot = () => resolve(process.env.STORAGE_DIR || "./data/uploads","website");
+function mediaType(buffer) {
+  if (buffer.length > 12 && buffer.toString("ascii",4,8) === "ftyp") return "video/mp4";
+  if (buffer.length > 12 && buffer.subarray(0,4).equals(Buffer.from("1a45dfa3","hex")) &&
+      buffer.subarray(0,128).includes("webm")) return "video/webm";
+  if (buffer.subarray(0,8).equals(Buffer.from("89504e470d0a1a0a","hex"))) return "image/png";
+  if (buffer.subarray(0,3).equals(Buffer.from("ffd8ff","hex"))) return "image/jpeg";
+  if (buffer.toString("ascii",0,4) === "RIFF" && buffer.toString("ascii",8,12) === "WEBP") return "image/webp";
+  return null;
+}
 function requirePermission(request, permission) {
   if (!hasPermission(request.actor, permission)) throw httpError(403, "هذا الإجراء غير مخوّل");
 }
@@ -144,23 +160,36 @@ export async function registerBackofficeRoutes(app) {
     if (!row) throw httpError(404,"طلب التوريد غير موجود");
     const money = minor => (Number(minor)/1000).toFixed(3);
     const settings = (await db.query("SELECT data FROM app_settings WHERE id=true")).rows[0]?.data;
+    const rawSettings = settings?.settings || settings;
     if (request.query.format === "pdf") {
       return reply.type("application/pdf").header("Content-Disposition","attachment; filename=purchase-order.pdf")
         .send(businessPDF({
-          settings:settings?.settings || settings,title:"طلب توريد",reference:row.id,
-          fields:[row.supplier_name,"التسليم: "+row.data.date,"المدفوع: "+money(row.paid_minor)+" KWD"],
-          lines:row.data.items.map(item=>({title:item.name,quantity:item.quantity,price:Number(item.unitCost)/1000})),
-          total:Number(row.amount_minor)/1000,notes:[row.data.notes],
+          settings: rawSettings,
+          docType: "PROCUREMENT",
+          title: "طلب توريد",
+          reference: row.id,
+          status: row.status,
+          fields: [
+            { label: "المورد", value: row.supplier_name },
+            { label: "تاريخ التسليم", value: row.data.date },
+            { label: "المدفوع", value: `${money(row.paid_minor)} د.ك` },
+            ...(row.data.bookingId ? [{ label: "مرجع الحجز", value: row.data.bookingId }] : []),
+          ],
+          lines: row.data.items.map(item => ({ title: item.name, quantity: item.quantity, price: Number(item.unitCost) / 1000 })),
+          total: Number(row.amount_minor) / 1000,
+          notes: [row.data.notes].filter(Boolean),
         }));
     }
-    return reply.type("text/html; charset=utf-8").header("Cache-Control","private, no-store").send(`<!doctype html>
-      <html lang="ar" dir="rtl"><meta charset="utf-8"><title>طلب توريد</title>
-      <style>body{font:16px Arial;margin:40px;line-height:1.7;color:#482831}table{width:100%;border-collapse:collapse}td,th{border:1px solid #ddc6b8;padding:10px}@media print{body{margin:0}}</style>
-      <h1>طلب توريد · هَبّ السعد</h1><p>المرجع ${escapeHTML(row.id)}</p>
-      <p>المورد ${escapeHTML(row.supplier_name)} · التسليم ${escapeHTML(row.data.date)}</p>
-      <table><thead><tr><th>الصنف</th><th>الكمية</th><th>تكلفة الوحدة د.ك</th></tr></thead><tbody>
-      ${row.data.items.map(item=>`<tr><td>${escapeHTML(item.name)}</td><td>${item.quantity}</td><td>${money(item.unitCost)}</td></tr>`).join("")}
-      </tbody></table><p>الإجمالي ${money(row.amount_minor)} د.ك · المدفوع ${money(row.paid_minor)} د.ك</p><p>${escapeHTML(row.data.notes)}</p></html>`);
+    return reply
+      .type("text/html; charset=utf-8")
+      .header("Cache-Control", "private, no-store")
+      .header("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'")
+      .send(procurementHTML({
+        record: row,
+        supplierName: row.supplier_name,
+        identity: brandSnapshot(rawSettings),
+        moneyFn: money,
+      }));
   });
   app.get("/api/backoffice/records/:kind/:id", auth, async request => {
     const spec = resource(request, "view");
@@ -217,6 +246,42 @@ export async function registerBackofficeRoutes(app) {
       return record;
     });
   });
+  app.post("/api/backoffice/content-media", auth, async request => {
+    requirePermission(request,"content.edit");
+    const part = await request.file({limits:{fileSize:10*1024*1024,files:1,fields:0}});
+    if (!part) throw httpError(400,"اختر صورة أو فيديو");
+    const bytes = await part.toBuffer();
+    const mime = mediaType(bytes);
+    if (!mime || mime !== part.mimetype || !Object.hasOwn(mediaExtensions,mime))
+      throw httpError(415,"نوع الوسائط غير مدعوم");
+    const name = randomUUID()+"."+mediaExtensions[mime];
+    const root = mediaRoot();
+    await mkdir(root,{recursive:true,mode:0o700});
+    await writeFile(resolve(root,name),bytes,{flag:"wx",mode:0o600});
+    return {path:"/api/content-media/"+name};
+  });
+  app.get("/api/content-media/:name", async (request,reply) => {
+    const name = request.params.name;
+    if (!mediaName.test(name)) throw httpError(404,"الوسائط غير موجودة");
+    const path = "/api/content-media/"+name;
+    const published = (await db.query(
+      "SELECT 1 FROM content_publications p JOIN content_revisions r ON r.id=p.revision_id WHERE r.value=$1 LIMIT 1",[path],
+    )).rowCount;
+    if (!published && !hasPermission(request.actor,"content.view")) throw httpError(404,"الوسائط غير موجودة");
+    const file = resolve(mediaRoot(),name);
+    const size = await stat(file).then(info=>info.size).catch(()=>0);
+    if (!size) throw httpError(404,"الوسائط غير موجودة");
+    const mime = Object.entries(mediaExtensions).find(([,extension])=>name.endsWith("."+extension))[0];
+    reply.type(mime).header("Cache-Control","no-store").header("Accept-Ranges","bytes");
+    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range || "");
+    if (range) {
+      const start = Number(range[1]), end = range[2] ? Math.min(Number(range[2]),size-1) : size-1;
+      if (start > end || start >= size) return reply.code(416).header("Content-Range","bytes */"+size).send();
+      return reply.code(206).header("Content-Range",`bytes ${start}-${end}/${size}`)
+        .header("Content-Length",end-start+1).send(createReadStream(file,{start,end}));
+    }
+    return reply.header("Content-Length",size).send(createReadStream(file));
+  });
   app.get("/api/content", async () => {
     const rows = (await db.query("SELECT p.content_key,r.value FROM content_publications p JOIN content_revisions r ON r.id=p.revision_id")).rows;
     return Object.fromEntries(rows.map(row => [row.content_key,row.value]));
@@ -239,10 +304,26 @@ export async function registerBackofficeRoutes(app) {
     requirePermission(request,input.action === "publish" ? "content.publish" : "content.edit");
     return db.transaction(async client => {
       if (input.action === "draft") {
+        if (key === "home.sections.order") {
+          const order = input.value.split(",");
+          if (order.length !== homeSections.length || new Set(order).size !== order.length ||
+              order.some(section=>!homeSections.includes(section))) throw httpError(400,"ترتيب الأقسام غير صالح");
+        }
         if (key.endsWith(".visible")) z.enum(["true","false"]).parse(input.value);
         if (key.endsWith(".link")) z.string().regex(/^\/(?![\/\\])[^\\\x00-\x20]*$/).max(400).parse(input.value);
-        if (key.endsWith(".image")) z.string().regex(/^\/assets\/[a-z0-9_./-]+\.(?:jpg|jpeg|png|webp)$/i).max(200).parse(input.value);
-        if (key.endsWith(".video") && input.value) z.string().regex(/^\/(?:assets|brand-motion)\/[a-z0-9_./-]+\.(?:mp4|webm)$/i).max(200).parse(input.value);
+        if (/\.(image|video)$/.test(key) && input.value) {
+          const video = key.endsWith(".video");
+          const upload = input.value.startsWith("/api/content-media/");
+          const pattern = video ? /^\/(?:assets|brand-motion|api\/content-media)\/[a-z0-9_./-]+\.(mp4|webm)$/i :
+            /^\/(?:assets|brand-motion|api\/content-media)\/[a-z0-9_./-]+\.(jpg|jpeg|png|webp)$/i;
+          if (!pattern.test(input.value) || input.value.includes(".."))
+            throw httpError(400,"مسار الوسائط غير صالح");
+          if (upload) {
+            const name = input.value.slice("/api/content-media/".length);
+            if (!mediaName.test(name) || !(await stat(resolve(mediaRoot(),name)).catch(()=>null))?.isFile())
+              throw httpError(400,"الملف المرفوع غير موجود");
+          }
+        }
         const row = (await client.query("INSERT INTO content_revisions(content_key,value,created_by) VALUES($1,$2,$3) RETURNING *",[key,input.value,request.actor.id])).rows[0];
         await audit(client,request,"CONTENT_DRAFT_SAVED","content",key,null,{revision:row.id});
         return row;

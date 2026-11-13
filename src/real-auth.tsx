@@ -118,7 +118,7 @@ export function RealAuth({ path }: { path: string }) {
         <div className="auth-journey-heading">
           <span className="eyebrow">حياكم الله{identity.name && " في " + identity.name}</span>
           <h1 id="auth-journey-title">{contentText("auth."+kind+".title",title)}</h1>
-          <p>{intro}</p>
+          <p>{contentText("auth."+kind+".intro",intro)}</p>
         </div>
         <form onSubmit={submit} aria-busy={busy}>
           {register && <div className="auth-contact">
@@ -156,7 +156,7 @@ export function RealAuth({ path }: { path: string }) {
           {needsVerification && <Link className="auth-secondary-link" to={authLink("verify")}>كمّلوا تأكيد البريد</Link>}
           {notice && <p className="info" role="status">{notice}</p>}
           <Btn type="submit" className="full auth-submit" disabled={busy || resending}>
-            {busy ? "لحظة… نجهّز طلبكم" : submitLabel}<ArrowLeft size={18} />
+            {busy ? "لحظة… نجهّز طلبكم" : contentText("auth."+kind+".submit",submitLabel)}<ArrowLeft size={18} />
           </Btn>
           {verify && <Btn type="button" variant="text" disabled={busy || resending || !email}
             onClick={async () => {

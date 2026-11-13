@@ -12,7 +12,7 @@ import {
   fromMinor,
   integrationError,
 } from "./providers/payments.mjs";
-import { contractHTML, escapeHTML, brandSnapshot, documentBrandHTML } from "./providers/documents.mjs";
+import { contractHTML, receiptHTML, escapeHTML, brandSnapshot, documentBrandHTML } from "./providers/documents.mjs";
 import { installmentMinors, totals } from "../src/money.mjs";
 import {integrationEnvironment} from './integration-runtime.mjs';
 
@@ -517,6 +517,39 @@ export async function registerIntegrationRoutes(app) {
       status: b.status,
       clauses: "عرض سعر معتمد؛ يحفظ العقد وشروطه في وثيقة مستقلة",
     };
+    const settings = await currentSettings(db);
+    if (request.query.format === "pdf") {
+      const pdfTitle = data.kind === "AMENDMENT"
+        ? "ملحق عقد تنظيم مناسبة"
+        : b.data.contract && data.kind !== "QUOTE"
+          ? "عقد تنظيم مناسبة"
+          : "عرض سعر تنظيم مناسبة";
+      return reply
+        .type("application/pdf")
+        .header("Cache-Control", "private,no-store")
+        .header("Content-Disposition", `attachment; filename="quote-${encodeURIComponent(b.id)}.pdf"`)
+        .send(businessPDF({
+          settings,
+          branding: data.branding || undefined,
+          docType: "QUOTE",
+          title: pdfTitle,
+          reference: `${b.id} · v${b.version || 1}`,
+          status: data.status || b.status,
+          fields: [
+            { label: "الجهة المنظمة", value: data.company?.name || "" },
+            { label: "السجل التجاري", value: data.company?.registrationNumber || "" },
+            { label: "العميل", value: b.data?.customer || "" },
+            { label: "تاريخ المناسبة", value: b.data?.occasion?.date || "" },
+          ],
+          lines: (data.snapshot || data.lines || b.data?.lines || []).map((line) => ({
+            title: line.title,
+            quantity: line.qty || 1,
+            price: line.price,
+          })),
+          total: data.total,
+          notes: [data.terms || data.clauses].filter(Boolean),
+        }));
+    }
     return reply
       .header("Cache-Control", "private,no-store")
       .header("Content-Disposition", 'attachment; filename="quotation.html"')
@@ -525,7 +558,7 @@ export async function registerIntegrationRoutes(app) {
         "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'none'",
       )
       .type("text/html; charset=utf-8")
-      .send(contractHTML(b, { version: b.version, status: b.status, data }, await currentSettings(db)));
+      .send(contractHTML(b, { version: b.version, status: b.status, data }, settings));
   });
   app.get("/api/documents/receipt/:id", authed, async (request, reply) => {
     const pay = (
@@ -537,24 +570,42 @@ export async function registerIntegrationRoutes(app) {
       throw integrationError("الإيصال غير موجود", 404);
     if (!["PAID", "REFUNDED", "REFUND_PENDING"].includes(pay.status))
       throw integrationError("لا يصدر إيصال تحصيل قبل التحقق من الدفع", 409);
+    const amountKwd = fromMinor(pay.amount_minor);
     const rows = [
       ["رقم العملية", pay.id],
       ["مرجع بوابة الدفع", pay.provider_reference],
       ["رقم الحجز", pay.booking_id],
-      ["المبلغ د.ك", fromMinor(pay.amount_minor)],
+      ["المبلغ د.ك", amountKwd],
       ["حالة الدفعة", pay.status],
       ["المسترد د.ك", pay.data.refunded || 0],
       ["التاريخ", pay.created_at],
     ];
     const row = (await db.query("SELECT data FROM app_settings WHERE id=true")).rows[0]?.data;
-    const identity = brandSnapshot(row?.settings || row);
-    const html =
-      '<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>إيصال دفع</title>' +
-      documentBrandHTML(identity) + '<h1>' + escapeHTML([identity.title, "إيصال دفع موثّق"].filter(Boolean).join(" — ")) + '</h1>' +
-      rows
-        .map(([k, v]) => "<p>" + escapeHTML(k) + ": " + escapeHTML(v) + "</p>")
-        .join("") +
-      "</html>";
+    const settings = row?.settings || row;
+    const identity = brandSnapshot(settings);
+    if (request.query.format === "pdf") {
+      return reply
+        .type("application/pdf")
+        .header("Cache-Control", "private,no-store")
+        .header("Content-Disposition", `attachment; filename="receipt-${encodeURIComponent(pay.id)}.pdf"`)
+        .send(businessPDF({
+          settings,
+          docType: "RECEIPT",
+          title: "إيصال دفع موثّق",
+          reference: pay.id,
+          status: pay.status,
+          fields: [
+            { label: "رقم الحجز", value: pay.booking_id },
+            { label: "مرجع بوابة الدفع", value: pay.provider_reference || "—" },
+            { label: "تاريخ العملية", value: String(pay.created_at || "").slice(0, 19).replace("T", " ") },
+            { label: "المبلغ المسترد", value: `${pay.data.refunded || 0} د.ك` },
+          ],
+          lines: [{ title: `دفعة مالية معتمدة للحجز ${pay.booking_id}`, quantity: 1, price: Number(amountKwd) }],
+          total: amountKwd,
+          notes: ["وثيقة تحصيل رسمية صادرة من النظام المالي لمنصة هَبّ السعد."],
+        }));
+    }
+    const html = receiptHTML({ payment: pay, identity, rows });
     return reply
       .header("Cache-Control", "private,no-store")
       .header("Content-Disposition", 'attachment; filename="receipt.html"')
@@ -864,17 +915,31 @@ export async function registerIntegrationRoutes(app) {
     if(c.data.externalSignature?.fileId)return reply.redirect('/api/files/'+c.data.externalSignature.fileId);
     if (request.query.format === "pdf") {
       const data = c.data;
+      const settings = await currentSettings(db);
       return reply.type("application/pdf")
         .header("Content-Disposition",`attachment; filename="contract-v${c.version}.pdf"`)
         .send(businessPDF({
-          settings:{brand:data.branding?.title || ""}, title:data.kind === "AMENDMENT" ? "ملحق عقد تنظيم مناسبة" : "عقد تنظيم مناسبة",
+          settings,
+          branding: data.branding || undefined,
+          docType: data.kind === "AMENDMENT" ? "AMENDMENT" : "CONTRACT",
+          title:data.kind === "AMENDMENT" ? "ملحق عقد تنظيم مناسبة" : "عقد تنظيم مناسبة",
           reference:`${b.id} · V${c.version}`,
-          fields:[data.company?.name,data.company?.registrationNumber,
-            "العميل: "+b.data.customer,"تاريخ المناسبة: "+b.data.occasion.date,
-            c.status === "SIGNED" ? "العقد موقّع" : "بانتظار التوقيع"],
+          status: c.status,
+          fields:[
+            { label: "الجهة المتعاقدة", value: data.company?.name || "" },
+            { label: "السجل التجاري", value: data.company?.registrationNumber || "" },
+            { label: "العميل", value: b.data.customer },
+            { label: "تاريخ المناسبة", value: b.data.occasion.date },
+            { label: "حالة التوقيع", value: c.status === "SIGNED" ? "العقد موقّع" : "بانتظار التوقيع" },
+          ],
           lines:(data.snapshot || data.lines || []).map(line=>({title:line.title,quantity:line.qty,price:line.price})),
-          total:data.total, notes:[data.terms || data.clauses,
-            (data.paymentSchedule || []).join("% / ")+"%",data.signature,c.document_hash],
+          total:data.total,
+          notes:[
+            data.terms || data.clauses,
+            (data.paymentSchedule || []).length ? `جدول الدفعات: ${(data.paymentSchedule || []).join("% / ")}%` : "",
+            data.signature ? `التوقيع: ${data.signature}` : "",
+            c.document_hash ? `بصمة الوثيقة: ${c.document_hash}` : "",
+          ].filter(Boolean),
         }));
     }
     // Render the frozen version, never the mutable catalog.

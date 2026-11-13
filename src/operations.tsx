@@ -6,6 +6,7 @@ import { BrandedLoader } from "./components/brand-motion/BrandedLoader";
 import {BrandSettings} from "./brand-settings";
 import {branding} from "./branding.mjs";
 import {useRecordPage,RecordPager,downloadRecords,useServerValue} from './record-pagination';
+import { downloadXlsx } from "./excel-export.mjs";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -56,12 +57,15 @@ import {
   Mail,
   Phone,
   LockKeyhole,
+  FileSpreadsheet,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Btn,
   Link,
   Price,
   Badge,
+  StatusAlert,
   Field,
   Empty,
   SectionTitle,
@@ -336,11 +340,23 @@ export function Admin(props: any) {
               to="/admin" cta="العودة للوحة الإدارة" />
           ) : routeError ? (
             <div className="card">
-              <Empty title="تعذر تحميل بيانات القسم" text={s.runtime.error} />
-              <Btn onClick={() => api.refresh(true).catch(() => {})}>إعادة المحاولة</Btn>
+              <StatusAlert
+                tone="error"
+                title="تعذر تحميل بيانات القسم"
+                action={
+                  <Btn intent="warn" onClick={() => api.refresh(true).catch(() => {})}>
+                    <RefreshCw size={15} aria-hidden="true" />
+                    إعادة المحاولة
+                  </Btn>
+                }
+              >
+                {s.runtime.error}
+              </StatusAlert>
             </div>
           ) : waitingForRoute ? (
-            <div className="admin-section-loading" role="status">جارٍ تحميل بيانات القسم…</div>
+            <div className="admin-section-loading" role="status">
+              <StatusAlert tone="in-progress">جارٍ تحميل بيانات القسم…</StatusAlert>
+            </div>
           ) : page === "" ? (
             <AdminOverview {...props} />
           ) : page === "roles" ? (
@@ -365,7 +381,7 @@ export function Admin(props: any) {
           ) : page === "integrations" ? (
             <IntegrationSettings />
           ) : page === 'deliveries' ? (
-            <DeliveryHistory />
+            <DeliveryHistory id={id} />
           ) : page === "settlements" ? (
             <Settlements session={s.session} />
           ) : page === "catalog" || page === "packages" ? (
@@ -649,7 +665,7 @@ function OrderTable({ orders }: any) {
               </td>
               <td>
                 <Link
-                  className="icon-btn"
+                  className="icon-btn intent-info"
                   to={"/admin/orders/" + o.id}
                   aria-label={"تفاصيل " + o.id}
                 >
@@ -750,30 +766,68 @@ function Orders({ s, kind }: any) {
       </section>
       <div className="section-title section">
         <h2>{records.total} طلب</h2>
-        <Btn
-          variant="outline"
-          onClick={() =>
-            !isDemo?downloadRecords('bookings',recordParams):exportFile(
-              "orders.csv",
-              "رقم الطلب,العميل,التاريخ,الإجمالي,الحالة\n" +
-                list
-                  .map((o) =>
-                    [
-                      o.id,
-                      o.customer,
-                      o.occasion.date,
-                      pricing(o.lines, o.discount).total,
-                      labels[o.status],
-                    ].join(","),
-                  )
-                  .join("\n"),
-              "text/csv",
-            )
-          }
-        >
-          <Download size={16} />
-          تصدير CSV
-        </Btn>
+        <div className="button-row">
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() =>
+              !isDemo?downloadRecords('bookings',recordParams):exportFile(
+                "orders.csv",
+                "رقم الطلب,العميل,التاريخ,الإجمالي,الحالة\n" +
+                  list
+                    .map((o) =>
+                      [
+                        o.id,
+                        o.customer,
+                        o.occasion.date,
+                        pricing(o.lines, o.discount).total,
+                        labels[o.status],
+                      ].join(","),
+                    )
+                    .join("\n"),
+                "text/csv",
+              )
+            }
+          >
+            <Download size={16} aria-hidden="true" />
+            تصدير CSV
+          </Btn>
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() => {
+              if (!isDemo) return downloadRecords("bookings", recordParams, "xlsx");
+              const totalSum = list.reduce((sum: number, o: any) => sum + pricing(o.lines, o.discount).total, 0);
+              downloadXlsx("orders.xlsx", {
+                sheets: [{
+                  name: "سجل الطلبات",
+                  title: "هَبّ السعد — سجل الطلبات والحجوزات",
+                  subtitle: `عدد السجلات: ${list.length}`,
+                  columns: [
+                    { header: "المرجع", type: "code", width: 18 },
+                    { header: "العميل", type: "text", width: 22 },
+                    { header: "التاريخ", type: "date", width: 15 },
+                    { header: "نوع المناسبة", type: "text", width: 18 },
+                    { header: "المبلغ (د.ك)", type: "currency", width: 18 },
+                    { header: "الحالة", type: "status", width: 20 },
+                  ],
+                  rows: list.map((o: any) => [
+                    o.id,
+                    o.customer,
+                    o.occasion.date,
+                    o.occasion.type,
+                    pricing(o.lines, o.discount).total,
+                    { code: o.status, label: labels[o.status] || o.status },
+                  ]),
+                  totals: list.length ? ["الإجمالي", `${list.length} طلب`, "", "", totalSum, ""] : null,
+                }],
+              });
+            }}
+          >
+            <FileSpreadsheet size={16} aria-hidden="true" />
+            تصدير Excel
+          </Btn>
+        </div>
       </div>
       <section className="card">
         <OrderTable orders={list} />
@@ -817,12 +871,14 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
         <div className="button-row">
           {canEdit && !contractIssued && <Btn
             variant="outline"
+            intent="secondary"
             onClick={() => act("REVIEW", { id }, "بدأت مراجعة الموردين")}
           >
             مراجعة الطلب
           </Btn>}
           <Btn
             variant="outline"
+            intent="info"
             disabled={!canEdit}
             onClick={() => act("RENEW", { id }, "تم تجديد العرض")}
           >
@@ -845,7 +901,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             <Field label="الموقع"><input required name="location" defaultValue={o.occasion.location}/></Field>
             <Field label="الضيوف"><input required type="number" min={1} name="guests" defaultValue={o.occasion.guests}/></Field>
             <Field label="التفاصيل"><textarea name="notes" defaultValue={o.occasion.notes}/></Field>
-            <Btn type="submit">حفظ المناسبة</Btn>
+            <Btn type="submit" intent="success">حفظ المناسبة</Btn>
           </form>
         </details>}
         {o.source==="ASSISTED" && <p>طلب منشأ نيابة عن العميل · {o.createdBy}</p>}
@@ -951,7 +1007,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                           <Field label="سبب البديل">
                             <input name="reason" required />
                           </Field>
-                          <Btn type="submit" disabled={isSigned}>
+                          <Btn type="submit" intent="warn" disabled={isSigned}>
                             طلب تأكيد البديل
                           </Btn>
                         </form>
@@ -959,6 +1015,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                     ) : l.response !== "CONFIRMED_SUPPLIER" ? (
                       <Btn
                         variant="text"
+                        intent="secondary"
                         disabled={isSigned}
                         onClick={() =>
                           ask(
@@ -1018,6 +1075,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             <Price value={t.total} />
           </div>
           <Btn
+            intent="success"
             disabled={
               !canEdit || contractIssued ||
               !lines.every((l) => l.price > 0) ||
@@ -1035,17 +1093,14 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           </Btn>
         </div>
         {canProfit && t.margin !== null && t.margin < s.settings.threshold && (
-          <div className="warning">
-            <AlertCircle />
-            الهامش أقل من {s.settings.threshold}% — يتطلب اعتماد المالك قبل
-            إرسال العرض.
-          </div>
+          <StatusAlert tone="warning" className="warning">
+            الهامش أقل من {s.settings.threshold}% — يتطلب اعتماد المالك قبل إرسال العرض.
+          </StatusAlert>
         )}
         {isSigned && (
-          <div className="info">
-            <LockKeyhole size={20} />
+          <StatusAlert tone="info" className="info">
             العقد موقّع. التعديل متاح عبر ملحق مستقل فقط.
-          </div>
+          </StatusAlert>
         )}
       </section>
       <div className="grid two section">
@@ -1074,6 +1129,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           <div className="button-row">
             <Btn
               variant="outline"
+              intent="success"
               disabled={contractIssued || !canApprove}
               onClick={() =>
                 ask(
@@ -1087,6 +1143,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               اعتماد {s.session.role === "admin" ? "المالك" : "الموظف"}
             </Btn>
             <Btn
+              intent="primary"
               disabled={contractIssued || !canApprove}
               onClick={() =>
                 act("PUBLISH", { id }, "تم إرسال العرض المعتمد للعميل")
@@ -1095,15 +1152,14 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               إرسال عرض السعر
               <Send size={16} />
             </Btn>
-            {canEdit && editableStatus && <Btn variant="outline" onClick={() => ask("إعادة الطلب للمراجعة", "ORDER_REVIEW_DECISION", { id, decision: "review" })}>إعادة للمراجعة</Btn>}
-            {editableStatus && s.session.role === "admin" && <Btn variant="text" onClick={() => ask("رفض الطلب", "ORDER_REVIEW_DECISION", { id, decision: "reject" })}>رفض الطلب</Btn>}
-            {editableStatus && s.session.role === "admin" && <Btn variant="text" onClick={() => ask("إلغاء الطلب", "ORDER_REVIEW_DECISION", { id, decision: "cancel" })}>إلغاء الطلب</Btn>}
-
-
+            {canEdit && editableStatus && <Btn variant="outline" intent="warn" onClick={() => ask("إعادة الطلب للمراجعة", "ORDER_REVIEW_DECISION", { id, decision: "review" })}>إعادة للمراجعة</Btn>}
+            {editableStatus && s.session.role === "admin" && <Btn variant="text" intent="danger" onClick={() => ask("رفض الطلب", "ORDER_REVIEW_DECISION", { id, decision: "reject" })}>رفض الطلب</Btn>}
+            {editableStatus && s.session.role === "admin" && <Btn variant="text" intent="danger" onClick={() => ask("إلغاء الطلب", "ORDER_REVIEW_DECISION", { id, decision: "cancel" })}>إلغاء الطلب</Btn>}
           </div>
           {o.status === "DISPUTED" && (
             <Btn
               variant="outline"
+              intent="warn"
               onClick={() =>
                 ask(
                   "اعتماد إلغاء الحجز",
@@ -1144,7 +1200,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                 rows={2}
               />
             </Field>
-            <Btn type="submit" variant="outline">
+            <Btn type="submit" variant="outline" intent="secondary">
               حفظ الملاحظة
             </Btn>
           </form>}
@@ -1180,7 +1236,7 @@ function BookingRelations({id,version}) {
   const info=related.value;
   return <section className="card settings-form">
     <h3>السجلات المرتبطة بالحجز</h3>
-    {related.error && <p role="alert">{related.error} <button onClick={related.retry}>إعادة المحاولة</button></p>}
+    {related.error && <StatusAlert tone="error" role="alert" action={<Btn intent="warn" onClick={related.retry}>إعادة المحاولة</Btn>}>{related.error}</StatusAlert>}
     {info?.customer && <Link className="list-row" to={"/admin/customers/"+info.customer.id}>{info.customer.name} · {info.customer.mobile || info.customer.email}</Link>}
     {info?.purchase.map(row=><Link className="list-row" key={row.id} to={"/admin/procurement/"+row.id}>طلب توريد · {row.title}</Link>)}
     {info?.expenses.map(row=><Link className="list-row" key={row.id} to={"/admin/expenses/"+row.id}>مصروف · {row.title} <Price value={Number(row.amount_minor)/1000}/></Link>)}
@@ -1197,18 +1253,18 @@ function ContractDetails({order,actor,act}) {
   const version=selected || order.contract.version;
   const preview="/api/contracts/"+encodeURIComponent(order.id)+"?preview=1&version="+version;
   return <section className="card settings-form">
-    <h3>عقد المناسبة</h3>
-    <p>الإصدار الحالي {order.contract.version} · {order.contract.status==="SIGNED"?"موقّع":"بانتظار توقيع العميل"}</p>
-    {versions.error && <p role="alert">{versions.error}</p>}
+    <div className="row-between"><h3>عقد المناسبة</h3><Badge status={order.contract.status}>{order.contract.status==="SIGNED"?"موقّع":"بانتظار توقيع العميل"}</Badge></div>
+    <p><small>الإصدار الحالي {order.contract.version}</small></p>
+    {versions.error && <StatusAlert tone="error" role="alert">{versions.error}</StatusAlert>}
     <Field label="الإصدار">
       <select value={version} onChange={event=>setSelected(Number(event.target.value))}>
         {(versions.value || [{version:order.contract.version}]).map(item=><option key={item.version} value={item.version}>{item.version}</option>)}
       </select>
     </Field>
     <div className="button-row">
-      <a className="btn outline" href={preview} target="_blank" rel="noreferrer">فتح العقد للطباعة أو الحفظ PDF</a>
-      <a className="btn outline" href={preview.replace("preview=1","format=pdf")} download>تنزيل PDF</a>
-      <a className="btn outline" href={"mailto:?subject="+encodeURIComponent("عقد المناسبة "+order.id)+"&body="+encodeURIComponent(location.origin+"/contract/"+order.id)}>مشاركة رابط العميل</a>
+      <a className="btn outline intent-info" href={preview} target="_blank" rel="noreferrer"><Printer size={16} aria-hidden="true" />فتح العقد للطباعة أو الحفظ PDF</a>
+      <a className="btn outline intent-info" href={preview.replace("preview=1","format=pdf")} download><Download size={16} aria-hidden="true" />تنزيل PDF</a>
+      <a className="btn outline intent-secondary" href={"mailto:?subject="+encodeURIComponent("عقد المناسبة "+order.id)+"&body="+encodeURIComponent(location.origin+"/contract/"+order.id)}><Mail size={16} aria-hidden="true" />مشاركة رابط العميل</a>
     </div>
     <iframe title="معاينة العقد" src={preview} loading="lazy" style={{width:"100%",minHeight:420,border:"1px solid var(--sand)"}}/>
     {order.contract.status==="APPROVED" && hasPermission(actor,"contracts.edit") && <form key={order.version} onSubmit={event=>{
@@ -1216,7 +1272,7 @@ function ContractDetails({order,actor,act}) {
       act("CONTRACT_REVISE",{id:order.id,expectedVersion:order.version,terms});
     }}>
       <Field label="شروط النسخة الجديدة"><textarea required name="terms" rows={4} maxLength={10000} defaultValue={order.contract.terms}/></Field>
-      <Btn type="submit">إصدار نسخة معدلة</Btn>
+      <Btn type="submit" intent="secondary">إصدار نسخة معدلة</Btn>
     </form>}
   </section>;
 }
@@ -1279,22 +1335,63 @@ function Payments({ s, act, setModal }: any) {
           <option value="FAILED">فاشلة</option>
           <option value="REFUNDED">مستردة</option>
         </select>
-        <Btn
-          variant="outline"
-          onClick={() =>
-            !isDemo?downloadRecords('payments',recordParams):exportFile(
-              "payments.csv",
-              "العملية,الطلب,المبلغ,الحالة\n" +
-                list
-                  .map((p) => [p.id, p.orderId, p.amount, p.status].join(","))
-                  .join("\n"),
-              "text/csv",
-            )
-          }
-        >
-          تصدير
-          <Download size={16} />
-        </Btn>
+        <div className="button-row">
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() =>
+              !isDemo?downloadRecords('payments',recordParams):exportFile(
+                "payments.csv",
+                "العملية,الطلب,المبلغ,الحالة\n" +
+                  list
+                    .map((p) => [p.id, p.orderId, p.amount, p.status].join(","))
+                    .join("\n"),
+                "text/csv",
+              )
+            }
+          >
+            تصدير
+            <Download size={16} aria-hidden="true" />
+          </Btn>
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() => {
+              if (!isDemo) return downloadRecords("payments", recordParams, "xlsx");
+              const totalPaid = list.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+              const totalRefunded = list.reduce((sum: number, p: any) => sum + Number(p.refunded || 0), 0);
+              downloadXlsx("payments.xlsx", {
+                sheets: [{
+                  name: "المدفوعات",
+                  title: "هَبّ السعد — سجل المدفوعات والتحصيل",
+                  subtitle: `عدد العمليات: ${list.length}`,
+                  columns: [
+                    { header: "رقم العملية", type: "code", width: 18 },
+                    { header: "الطلب", type: "code", width: 16 },
+                    { header: "الوسيلة", type: "text", width: 16 },
+                    { header: "التاريخ", type: "date", width: 15 },
+                    { header: "المبلغ (د.ك)", type: "currency", width: 17 },
+                    { header: "المسترد (د.ك)", type: "currency", width: 17 },
+                    { header: "الحالة", type: "status", width: 18 },
+                  ],
+                  rows: list.map((p: any) => [
+                    p.id,
+                    p.orderId,
+                    p.method,
+                    String(p.at || "").slice(0, 10),
+                    Number(p.amount || 0),
+                    Number(p.refunded || 0),
+                    { code: p.status, label: labels[p.status] || p.status },
+                  ]),
+                  totals: list.length ? ["الإجمالي", `${list.length} دفعة`, "", "", totalPaid, totalRefunded, ""] : null,
+                }],
+              });
+            }}
+          >
+            <FileSpreadsheet size={16} aria-hidden="true" />
+            تصدير Excel
+          </Btn>
+        </div>
       </div>
       <section className="card">
         <div className="table-scroll">
@@ -1335,6 +1432,7 @@ function Payments({ s, act, setModal }: any) {
                       {p.status === "PENDING" && (
                         <Btn
                           variant="outline"
+                          intent="warn"
                           onClick={() =>
                             act(
                               isDemo ? "WEBHOOK" : "PAYMENT_REFRESH",
@@ -1353,9 +1451,11 @@ function Payments({ s, act, setModal }: any) {
                         p.refundStatus !== "REFUND_PENDING" && (
                           <Btn
                             variant="outline"
+                            intent="danger"
                             onClick={() =>
                               setModal({
                                 title: "استرداد دفعة",
+                                tone: "danger",
                                 body: (
                                   <form
                                     onSubmit={async (e) => {
@@ -1388,7 +1488,7 @@ function Payments({ s, act, setModal }: any) {
                                     <Field label="سبب الاسترداد">
                                       <textarea name="reason" required />
                                     </Field>
-                                    <Btn type="submit">إرسال طلب الاسترداد</Btn>
+                                    <Btn type="submit" intent="danger">إرسال طلب الاسترداد</Btn>
                                   </form>
                                 ),
                               })
@@ -1400,6 +1500,7 @@ function Payments({ s, act, setModal }: any) {
                       {p.refundStatus === "REFUND_PENDING" &&
                         s.session.role === "admin" && (
                           <Btn
+                            intent="warn"
                             onClick={() =>
                               act(
                                 isDemo ? "REFUND_SETTLE" : "REFUND_REFRESH",
@@ -1416,7 +1517,7 @@ function Payments({ s, act, setModal }: any) {
                           </Btn>
                         )}
                       <button
-                        className="icon-btn"
+                        className="icon-btn intent-info"
                         aria-label="تفاصيل العملية"
                         onClick={() =>
                           setModal({
@@ -1437,14 +1538,19 @@ function Payments({ s, act, setModal }: any) {
                                     </p>
                                   ))}
                                 </div>
-                                <Btn
-                                  onClick={() =>
-                                    exportFile(p.receipt + ".json", p)
-                                  }
-                                >
-                                  تنزيل الإيصال
-                                  <Download size={16} />
-                                </Btn>
+                                <div className="button-row">
+                                  {!isDemo && <a className="btn outline intent-info" href={"/api/documents/receipt/" + p.id + "?format=pdf"} download>تنزيل PDF <Download size={16} /></a>}
+                                  <Btn
+                                    variant="outline"
+                                    intent="info"
+                                    onClick={() =>
+                                      exportFile(p.receipt + ".json", p)
+                                    }
+                                  >
+                                    تنزيل الإيصال
+                                    <Download size={16} />
+                                  </Btn>
+                                </div>
                               </div>
                             ),
                           })
@@ -1466,6 +1572,8 @@ function Payments({ s, act, setModal }: any) {
 function ManageCatalog({ s, act, setModal, packages }: any) {
   const records=useRecordPage(packages?'packages':'services',{},packages?s.packages:s.services,s.runtime?.refreshedAt);
   const list=records.items;
+  const canEdit=hasPermission(s.session,"catalog.edit");
+  const canDelete=hasPermission(s.session,"catalog.delete");
   function edit(item: any = {}) {
     setModal({
       title: (item.id ? "تعديل " : "إضافة ") + (packages ? "باقة" : "خدمة"),
@@ -1482,6 +1590,17 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
               ? new FormData(e.currentTarget).getAll("inclusions")
               : undefined;
             delete f.inclusions;
+            if (packages) {
+              f.configuration = {
+                minGuests:Number(f.minGuests),maxGuests:Number(f.maxGuests),pricing:f.packagePricing,
+                options:String(f.packageOptions).split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{
+                  const [name,surcharge="0"]=line.split("|");
+                  return {name:name.trim(),surcharge:Number(surcharge)};
+                }),
+                extraServiceIds:new FormData(e.currentTarget).getAll("extras"),
+              };
+              for (const key of ["minGuests","maxGuests","packagePricing","packageOptions","extras"]) delete f[key];
+            }
             if (
               await act(packages ? "PACKAGE_SAVE" : "CATALOG_SAVE", {
                 ...item,
@@ -1513,6 +1632,22 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
               />
             </Field>
           </div>
+          <Field label="الوصف"><textarea name="description" maxLength={5000} defaultValue={item.description}/></Field>
+          {packages && <fieldset><legend>تخصيص الباقة</legend>
+            <div className="grid two">
+              <Field label="أقل عدد ضيوف"><input required name="minGuests" type="number" min={1} defaultValue={item.configuration?.minGuests ?? 1}/></Field>
+              <Field label="أقصى عدد ضيوف"><input required name="maxGuests" type="number" min={1} defaultValue={item.configuration?.maxGuests ?? 100000}/></Field>
+            </div>
+            <Field label="التسعير"><select name="packagePricing" defaultValue={item.configuration?.pricing ?? "per-guest"}>
+              <option value="per-guest">يتغير مع عدد الضيوف</option><option value="fixed">سعر ثابت</option>
+            </select></Field>
+            <Field label="خيارات الباقة" hint="خيار في كل سطر. اكتب الاسم ثم | ثم الزيادة بالدينار.">
+              <textarea name="packageOptions" defaultValue={item.configuration?.options.map(option=>option.name+" | "+option.surcharge).join("\n")}/>
+            </Field>
+            <Field label="الخدمات الإضافية"><select multiple size={5} name="extras" defaultValue={item.configuration?.extraServiceIds ?? []}>
+              {s.services.map(service=><option key={service.id} value={service.id}>{service.title}</option>)}
+            </select></Field>
+          </fieldset>}
           <Field label="الفئة">
             <select name="category" defaultValue={item.category}>
               {(s.categories || categories).slice(1).map((c) => (
@@ -1604,7 +1739,7 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
               rows={2}
             />
           </Field>
-          <Btn type="submit">
+          <Btn type="submit" intent="success">
             حفظ ونشر في الكتالوج
             <Check size={16} />
           </Btn>
@@ -1619,9 +1754,10 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
           {list.length} {packages ? "باقة" : "خدمة"}
         </h2>
         <div className="button-row">
-          {!packages && (
+          {!packages && s.session.role==="admin" && (
             <Btn
               variant="outline"
+              intent="secondary"
               onClick={() =>
                 setModal({
                   title: "إدارة فئات الخدمات",
@@ -1633,10 +1769,10 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
               <Flower2 size={16} />
             </Btn>
           )}
-          <Btn onClick={() => edit()}>
+          {canEdit && <Btn intent="success" onClick={() => edit()}>
             <Plus size={17} />
             إضافة {packages ? "باقة" : "خدمة"}
-          </Btn>
+          </Btn>}
         </div>
       </div>
       <div className="manage-grid">
@@ -1648,23 +1784,24 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
               <p>{x.category || "باقة متكاملة"}</p>
               <Price value={x.price} />
               <div className="button-row">
-                <Btn variant="outline" onClick={() => edit(x)}>
+                {canEdit && <Btn variant="outline" intent="secondary" onClick={() => edit(x)}>
                   تعديل
                   <Pencil size={14} />
-                </Btn>
-                <button
-                  className="icon-btn danger"
+                </Btn>}
+                {canDelete && <button
+                  className="icon-btn intent-danger"
                   aria-label={"حذف " + x.title}
                   onClick={() =>
                     setModal({
                       title: "حذف " + x.title,
+                      tone: "danger",
                       body: (
                         <>
-                          <p>
-                            ستختفي من الكتالوج. الطلبات والعقود السابقة تحتفظ
-                            بنسخها.
-                          </p>
+                          <StatusAlert tone="warning">
+                            ستختفي من الكتالوج. الطلبات والعقود السابقة تحتفظ بنسخها.
+                          </StatusAlert>
                           <Btn
+                            intent="danger"
                             onClick={async () => {
                               if (
                                 await act(
@@ -1686,7 +1823,7 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
                   }
                 >
                   <Trash2 size={16} />
-                </button>
+                </button>}
               </div>
             </div>
           </article>
@@ -1717,7 +1854,7 @@ function CategoryManager({ act }: any) {
             required
           />
         </Field>
-        <Btn type="submit">
+        <Btn type="submit" intent="success">
           حفظ الفئة
           <Check size={16} />
         </Btn>
@@ -1729,7 +1866,7 @@ function CategoryManager({ act }: any) {
             {s.services.filter((x) => x.category === c).length} خدمة
           </span>
           <button
-            className="icon-btn"
+            className="icon-btn intent-secondary"
             aria-label={"تعديل فئة " + c}
             onClick={() => {
               setOldName(c);
@@ -1739,7 +1876,7 @@ function CategoryManager({ act }: any) {
             <Pencil size={15} />
           </button>
           <button
-            className="icon-btn danger"
+            className="icon-btn intent-danger"
             aria-label={"حذف فئة " + c}
             onClick={() => act("CATEGORY_DELETE", { name: c })}
           >
@@ -1788,7 +1925,7 @@ function Suppliers({ s, act, setModal, id }: any) {
               ))}
             </select>
           </Field>
-          <Btn type="submit">حفظ المورد</Btn>
+          <Btn type="submit" intent="success">حفظ المورد</Btn>
         </form>
       ),
     });
@@ -1800,7 +1937,7 @@ function Suppliers({ s, act, setModal, id }: any) {
     const services=s.services.filter(item=>item.supplierId===id);
     return <section className="card settings-form">
       <h2>{supplier.name}</h2>
-      <Badge status={supplier.active ? "CONFIRMED":"CANCELLED"}>{supplier.active?"نشط":"مؤرشف"}</Badge>
+      <Badge status={supplier.active ? "ACTIVE" : "INACTIVE"}>{supplier.active ? "نشط" : "مؤرشف"}</Badge>
       <p>{supplier.category} · {supplier.serviceAreas || supplier.area}</p>
       {supplier.phone && <p>الهاتف <a href={"tel:"+supplier.phone}>{supplier.phone}</a></p>}
       {supplier.email && <p>البريد <a href={"mailto:"+supplier.email}>{supplier.email}</a></p>}
@@ -1819,13 +1956,13 @@ function Suppliers({ s, act, setModal, id }: any) {
         <Field label="التاريخ"><input required type="date" name="date"/></Field>
         <Field label="السعة"><input required type="number" min={0} max={10000} name="capacity"/></Field>
         <label className="check-label"><input name="blocked" type="checkbox"/> إغلاق الحجز</label>
-        <Btn type="submit">حفظ التوفر</Btn>
+        <Btn type="submit" intent="success">حفظ التوفر</Btn>
       </form>}
       <div className="button-row">
-        {canEdit && <Btn onClick={()=>edit(supplier)}>تعديل</Btn>}
-        {canEdit && <Btn variant="outline" onClick={()=>act("SUPPLIER_SAVE",{id,active:!supplier.active})}>{supplier.active?"أرشفة المورد":"إعادة تنشيط المورد"}</Btn>}
-        {canOpenAdminPage(s.session,"procurement") && <Btn to={"/admin/procurement?supplierId="+encodeURIComponent(id)}>طلبات التوريد</Btn>}
-        {canOpenAdminPage(s.session,"settlements") && <Btn to="/admin/settlements">المستحقات</Btn>}
+        {canEdit && <Btn intent="secondary" onClick={()=>edit(supplier)}>تعديل</Btn>}
+        {canEdit && <Btn variant="outline" intent={supplier.active ? "warn" : "success"} onClick={()=>act("SUPPLIER_SAVE",{id,active:!supplier.active})}>{supplier.active?"أرشفة المورد":"إعادة تنشيط المورد"}</Btn>}
+        {canOpenAdminPage(s.session,"procurement") && <Btn variant="outline" intent="info" to={"/admin/procurement?supplierId="+encodeURIComponent(id)}>طلبات التوريد</Btn>}
+        {canOpenAdminPage(s.session,"settlements") && <Btn variant="outline" intent="info" to="/admin/settlements">المستحقات</Btn>}
       </div>
     </section>;
   }
@@ -1840,7 +1977,7 @@ function Suppliers({ s, act, setModal, id }: any) {
           onChange={(e) => setQ(e.target.value)}
         />
         {hasPermission(s.session,"suppliers.edit") && (
-          <Btn onClick={() => edit()}>
+          <Btn intent="success" onClick={() => edit()}>
             إضافة مورد
             <Plus size={16} />
           </Btn>
@@ -1854,7 +1991,7 @@ function Suppliers({ s, act, setModal, id }: any) {
                 <span className="supplier-symbol">
                   <Flower2 size={32} strokeWidth={1} />
                 </span>
-                <Badge status={v.active ? "CONFIRMED" : "CANCELLED"}>
+                <Badge status={v.active ? "ACTIVE" : "INACTIVE"}>
                   {v.active ? "نشط" : "موقوف"}
                 </Badge>
               </div>
@@ -1909,12 +2046,13 @@ function Suppliers({ s, act, setModal, id }: any) {
               </details>
               {hasPermission(s.session,"suppliers.edit") && (
                 <div className="button-row">
-                  <Btn variant="outline" onClick={() => edit(v)}>
+                  <Btn variant="outline" intent="secondary" onClick={() => edit(v)}>
                     تعديل
                     <Pencil size={14} />
                   </Btn>
                   <Btn
                     variant="text"
+                    intent={v.active ? "danger" : "success"}
                     onClick={() =>
                       act("SUPPLIER_SAVE", { id: v.id, active: !v.active })
                     }
@@ -1958,10 +2096,9 @@ function Customers({ s, act, setModal }: any) {
                   {isDemo?own.length:person.bookingCount} مناسبات · إنفاق{" "}
                   <Price value={isDemo?own.reduce((a,o)=>a+o.paid,0):person.paidTotal} />
                 </p>
-                <div className="info">
-                  <ShieldCheck size={18} />
+                <StatusAlert tone="info" className="info">
                   تُعرض البيانات حسب صلاحيات حسابك لحماية الخصوصية.
-                </div>
+                </StatusAlert>
                 {own.map((o) => (
                   <Link
                     className="list-row"
@@ -1977,6 +2114,7 @@ function Customers({ s, act, setModal }: any) {
                 ))}
                 <Btn
                   variant="outline"
+                  intent="secondary"
                   disabled={!own.length}
                   onClick={() =>
                     setModal({
@@ -1998,7 +2136,7 @@ function Customers({ s, act, setModal }: any) {
                           <Field label="الملاحظة">
                             <textarea name="note" required />
                           </Field>
-                          <Btn type="submit">حفظ الملاحظة</Btn>
+                          <Btn type="submit" intent="success">حفظ الملاحظة</Btn>
                         </form>
                       ),
                     })
@@ -2026,6 +2164,7 @@ function Customers({ s, act, setModal }: any) {
             {t.status !== "RESOLVED" && (
               <Btn
                 variant="outline"
+                intent="secondary"
                 onClick={() =>
                   setModal({
                     title: "الرد على التذكرة",
@@ -2045,7 +2184,7 @@ function Customers({ s, act, setModal }: any) {
                         <Field label="الرد">
                           <textarea name="reply" required />
                         </Field>
-                        <Btn type="submit">إرسال الرد</Btn>
+                        <Btn type="submit" intent="primary">إرسال الرد</Btn>
                       </form>
                     ),
                   })
@@ -2074,7 +2213,7 @@ function CalendarMini({ s, onSelect }: any) {
   const calendar=useServerValue(()=>api.calendar(year+'-'+String(m+1).padStart(2,'0')),year+'-'+m,s.runtime?.refreshedAt);
   return (
     <div className="calendar" aria-busy={!isDemo && !calendar.value}>
-      {calendar.error && <p role="alert">{calendar.error}<button onClick={calendar.retry}>إعادة المحاولة</button></p>}
+      {calendar.error && <StatusAlert tone="error" role="alert" action={<Btn intent="warn" onClick={calendar.retry}>إعادة المحاولة</Btn>}>{calendar.error}</StatusAlert>}
       <div className="toolbar">
         <button
           aria-label="الشهر السابق"
@@ -2142,18 +2281,20 @@ function Events({ s, act }: any) {
       <div className="toolbar">
         <Btn
           variant={view === "board" ? "" : "outline"}
+          intent={view === "board" ? "primary" : "info"}
           onClick={() => setView("board")}
         >
           لوحة التنفيذ
         </Btn>
         <Btn
           variant={view === "calendar" ? "" : "outline"}
+          intent={view === "calendar" ? "primary" : "info"}
           onClick={() => setView("calendar")}
         >
           التقويم
         </Btn>
         {day && (
-          <Btn variant="text" onClick={() => setDay("")}>
+          <Btn variant="text" intent="info" onClick={() => setDay("")}>
             عرض كل الأيام
           </Btn>
         )}
@@ -2249,8 +2390,8 @@ function Reports({ s }: any) {
   if(!isDemo){total=report.value?.total || 0;profit=report.value?.profit || 0;actual=report.value?.actual || 0;}
   return (
     <>
-      {!isDemo && !report.value && !report.error && <p role="status">جارٍ حساب التقرير من قاعدة البيانات…</p>}
-      {report.error && <p role="alert">{report.error}<button onClick={report.retry}>إعادة المحاولة</button></p>}
+      {!isDemo && !report.value && !report.error && <StatusAlert tone="in-progress" role="status">جارٍ حساب التقرير من قاعدة البيانات…</StatusAlert>}
+      {report.error && <StatusAlert tone="error" role="alert" action={<Btn intent="warn" onClick={report.retry}>إعادة المحاولة</Btn>}>{report.error}</StatusAlert>}
       {report.value && <section className="card settings-form">
         <h3>النتيجة المالية المحصّلة</h3>
         <div className="grid three">
@@ -2279,26 +2420,93 @@ function Reports({ s }: any) {
             <option key={t}>{t}</option>
           ))}
         </select>
-        <Btn
-          variant="outline"
-          onClick={() =>
-            exportFile(
-              "report.csv",
-              "نوع التقرير,القيمة\nالإيرادات المتوقعة," +
-                total +
-                "\nالربح المتوقع," +
-                profit +
-                "\nالمحصّل," +
-                actual +
-                "\nمتوسط العقد," +
-                total / (count || 1),
-              "text/csv",
-            )
-          }
-        >
-          <Download size={16} />
-          تصدير التقرير
-        </Btn>
+        <div className="button-row">
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() =>
+              exportFile(
+                "report.csv",
+                "نوع التقرير,القيمة\nالإيرادات المتوقعة," +
+                  total +
+                  "\nالربح المتوقع," +
+                  profit +
+                  "\nالمحصّل," +
+                  actual +
+                  "\nمتوسط العقد," +
+                  total / (count || 1),
+                "text/csv",
+              )
+            }
+          >
+            <Download size={16} aria-hidden="true" />
+            تصدير التقرير
+          </Btn>
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() => {
+              const avg = Number(total) / (count || 1);
+              const quoteCount = isDemo ? list.filter((o: any) => o.quoteSnapshot || o.contract).length : (report.value?.quotes || 0);
+              const contractCount = isDemo ? list.filter((o: any) => o.contract).length : (report.value?.contracts || 0);
+              const paidCount = isDemo ? list.filter((o: any) => o.paid > 0).length : (report.value?.paid || 0);
+              const kpiRows: any[] = [
+                ["الإيرادات المتوقعة", Number(total), "KWD"],
+                ["الربح المتوقع", Number(profit), "KWD"],
+                ["المحصّل فعليًا", Number(actual), "KWD"],
+                ["متوسط قيمة العقد", Number(avg), "KWD"],
+              ];
+              if (report.value?.directCosts !== undefined) kpiRows.push(["تكلفة الخدمات المباشرة", Number(report.value.directCosts), "KWD"]);
+              if (report.value?.grossProfit !== undefined) kpiRows.push(["الربح الإجمالي", Number(report.value.grossProfit), "KWD"]);
+              if (report.value?.operatingExpenses !== undefined) kpiRows.push(["المصروفات الإدارية المدفوعة", Number(report.value.operatingExpenses), "KWD"]);
+              if (report.value?.netProfit !== undefined) kpiRows.push(["الربح الصافي", Number(report.value.netProfit), "KWD"]);
+              downloadXlsx("financial-report.xlsx", {
+                sheets: [
+                  {
+                    name: "الملخص المالي",
+                    title: "هَبّ السعد — التقرير المالي التنفيذي",
+                    subtitle: `الفترة: آخر ${period} أشهر · المناسبة: ${occasion === "all" ? "كل المناسبات" : occasion}`,
+                    columns: [
+                      { header: "المؤشر المالي", type: "text", width: 30 },
+                      { header: "القيمة (د.ك)", type: "currency", width: 20 },
+                      { header: "الوحدة", type: "code", width: 12 },
+                    ],
+                    rows: kpiRows,
+                  },
+                  {
+                    name: "مسار التحويل",
+                    title: "مراحل تحويل الطلبات والعقود",
+                    columns: [
+                      { header: "المرحلة", type: "text", width: 26 },
+                      { header: "العدد", type: "number", width: 14 },
+                      { header: "النسبة من الطلبات", type: "text", width: 18 },
+                    ],
+                    rows: [
+                      ["إجمالي الطلبات", count, "100%"],
+                      ["العروض المرسلة", quoteCount, `${Math.round((Number(quoteCount) / Math.max(1, count)) * 100)}%`],
+                      ["العقود المعتمدة", contractCount, `${Math.round((Number(contractCount) / Math.max(1, count)) * 100)}%`],
+                      ["الحجوزات المدفوعة", paidCount, `${Math.round((Number(paidCount) / Math.max(1, count)) * 100)}%`],
+                    ],
+                  },
+                  ...(suppliers.items.length ? [{
+                    name: "أداء الموردين",
+                    title: "تقييم والتزام الموردين",
+                    columns: [
+                      { header: "المورد", type: "text", width: 28 },
+                      { header: "نسبة الاستجابة %", type: "number", width: 18 },
+                      { header: "نسبة الالتزام %", type: "number", width: 18 },
+                      { header: "التقييم", type: "number", width: 14 },
+                    ],
+                    rows: suppliers.items.map((v: any) => [v.name, Number(v.response || 0), Number(v.reliability || 0), Number(v.rating || 0)]),
+                  }] : []),
+                ],
+              });
+            }}
+          >
+            <FileSpreadsheet size={16} aria-hidden="true" />
+            تصدير Excel
+          </Btn>
+        </div>
       </div>
       <div className="kpi-grid">
         {[
@@ -2371,9 +2579,11 @@ function Team({ s, act, setModal }: any) {
     <>
       <RecordPager data={records} />
       <Btn
+        intent="success"
         onClick={() =>
           setModal({
             title: "دعوة موظف",
+            tone: "success",
             body: (
               <form
                 onSubmit={async (e) => {
@@ -2404,7 +2614,7 @@ function Team({ s, act, setModal }: any) {
                     <option value="admin">مالك / مدير</option>
                   </select>
                 </Field>
-                <Btn type="submit">إنشاء الدعوة</Btn>
+                <Btn type="submit" intent="success">إنشاء الدعوة</Btn>
               </form>
             ),
           })
@@ -2444,13 +2654,14 @@ function Team({ s, act, setModal }: any) {
                     </select>
                   </td>
                   <td>
-                    <Badge status={u.active ? "CONFIRMED" : "CANCELLED"}>
+                    <Badge status={u.active ? "ACTIVE" : "INACTIVE"}>
                       {u.active ? "نشط" : "موقوف"}
                     </Badge>
                   </td>
                   <td>
                     <Btn
                       variant="outline"
+                      intent={u.active ? "danger" : "success"}
                       disabled={u.id === s.session.id}
                       onClick={() =>
                         act("USER_SAVE", { id: u.id, active: !u.active })
@@ -2516,13 +2727,47 @@ function Audit({ s }: any) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <Btn
-          variant="outline"
-          onClick={() => isDemo?exportFile('audit-log.json',list):downloadRecords('audit',recordParams)}
-        >
-          <Download size={16} />
-          تصدير السجل
-        </Btn>
+        <div className="button-row">
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() => isDemo?exportFile('audit-log.json',list):downloadRecords('audit',recordParams)}
+          >
+            <Download size={16} aria-hidden="true" />
+            تصدير السجل
+          </Btn>
+          <Btn
+            variant="outline"
+            intent="info"
+            onClick={() => {
+              if (!isDemo) return downloadRecords("audit", recordParams, "xlsx");
+              downloadXlsx("audit-log.xlsx", {
+                sheets: [{
+                  name: "سجل التدقيق",
+                  title: "هَبّ السعد — سجل التدقيق والعمليات",
+                  subtitle: `عدد السجلات: ${list.length}`,
+                  columns: [
+                    { header: "المعرف", type: "code", width: 18 },
+                    { header: "الإجراء", type: "code", width: 24 },
+                    { header: "المنفذ", type: "text", width: 20 },
+                    { header: "العنصر", type: "code", width: 20 },
+                    { header: "التوقيت", type: "date", width: 20 },
+                  ],
+                  rows: list.map((a: any) => [
+                    a.id,
+                    a.action,
+                    a.actor,
+                    a.entity,
+                    String(a.at || "").slice(0, 19).replace("T", " "),
+                  ]),
+                }],
+              });
+            }}
+          >
+            <FileSpreadsheet size={16} aria-hidden="true" />
+            تصدير Excel
+          </Btn>
+        </div>
       </div>
       <section className="card">
         <div className="table-scroll">
@@ -2567,6 +2812,8 @@ function Audit({ s }: any) {
   );
 }
 function SettingsPage({ s, act }: any) {
+  const roleList=useServerValue(()=>api.backoffice("/roles"),"workflow-roles");
+
   const [dirty, setDirty] = useState(false);
   React.useEffect(() => {
     const f = (e: BeforeUnloadEvent) => {
@@ -2624,7 +2871,11 @@ function SettingsPage({ s, act }: any) {
           supplierReview: Boolean(f.supplierReview),
           staffReview: Boolean(f.staffReview),
           approval: f.approval,
+          delegatedRoleId:f.delegatedRoleId || null,
+          delegatedLimit:f.delegatedLimit === "" ? null : Number(f.delegatedLimit),
         };
+        delete f.delegatedRoleId;
+        delete f.delegatedLimit;
         delete f.supplierReview;
         delete f.staffReview;
         delete f.approval;
@@ -2749,6 +3000,16 @@ function SettingsPage({ s, act }: any) {
             <option value="delegated">المالك أو الموظف المخوّل</option>
           </select>
         </Field>
+        <Field label="الدور المخوّل بالاعتماد عند تفعيل التفويض">
+          <select name="delegatedRoleId" key={roleList.value ? "ready" : "loading"} defaultValue={s.settings.workflow?.delegatedRoleId || ""}>
+            <option value="">أي موظف يملك صلاحية الاعتماد</option>
+            {roleList.value?.roles.filter(role=>role.active && role.permissions.includes("orders.approve")).map(role=>
+              <option key={role.id} value={role.id}>{role.name}</option>)}
+          </select>
+        </Field>
+        <Field label="الحد الأعلى للعرض المفوّض بالدينار">
+          <input type="number" name="delegatedLimit" min={0} step=".001" defaultValue={s.settings.workflow?.delegatedLimit ?? ""} placeholder="بلا حد إضافي"/>
+        </Field>
       </fieldset>
       <label className="check-label">
         <input
@@ -2758,8 +3019,8 @@ function SettingsPage({ s, act }: any) {
         />
         السماح بسداد الدفعات قبل الاستحقاق
       </label>
-      {dirty && <p className="warning">توجد تغييرات غير محفوظة.</p>}
-      <Btn type="submit">
+      {dirty && <StatusAlert tone="warning" className="warning">توجد تغييرات غير محفوظة.</StatusAlert>}
+      <Btn type="submit" intent="success">
         حفظ الإعدادات
         <Check size={17} />
       </Btn>
@@ -3172,11 +3433,7 @@ export function Utility({ s, act, path, setToast, signOut, signingOut }: any) {
               <Flower2 size={54} strokeWidth={0.8} />
               <h2>كل مناسبة.. حكاية كويتية تبيّض الوجه</h2>
               <p>
-                {brand} منصة كويتية تجمع أرقى وأسنع خدمات المناسبات والأفراح
-                والضيافة بتجربة وحدة متكاملة تجمع بين أصالة التراث وذرابة
-                الحاضر. نرتب كل شاردة وواردة ويا مزودي الخدمة المعتمدين، نشيك
-                على التوفر والتكاليف بكل شفافية، ونمشي وياكم خطوة بخطوة من أول
-                ما يخطر ببالكم الحفل لين تطفون شمعة ليلتكم المباركة.
+                {contentText("pages.about.body",brand+" منصة كويتية تجمع أرقى وأسنع خدمات المناسبات والأفراح والضيافة بتجربة وحدة متكاملة تجمع بين أصالة التراث وذرابة الحاضر. نرتب كل شاردة وواردة ويا مزودي الخدمة المعتمدين، نشيك على التوفر والتكاليف بكل شفافية، ونمشي وياكم خطوة بخطوة من أول ما يخطر ببالكم الحفل لين تطفون شمعة ليلتكم المباركة.")}
               </p>
               <p>
                 من عروسنا وأفراحنا الكبيرة لين غبقاتنا وقعداتنا الحميمة، فريقنا
@@ -3229,15 +3486,16 @@ export function Utility({ s, act, path, setToast, signOut, signingOut }: any) {
                 "شلون تستخدمون بياناتي؟",
                 isDemo ? "بيانات العرض التجريبي محفوظة في المتصفح." : (s.settings.privacy || "نستخدم بيانات الحساب والحجز لتقديم الخدمة. لا نخزن بيانات البطاقات؛ تتم معالجة الدفع في صفحة المزود الآمنة. تواصلوا مع الفريق لسياسة الخصوصية المعتمدة."),
               ],
-            ].map(([t, p]) => (
-              <details key={t}>
+            ].map(([t, p], index) => {
+              const topic = ["booking","prices","amendments","payments","cancellation","suppliers","privacy"][index];
+              return <details key={topic}>
                 <summary>
-                  {t}
+                  {contentText("pages.faq."+topic+".question",t)}
                   <ChevronLeft size={16} />
                 </summary>
-                <p>{p}</p>
+                <p>{contentText("pages.faq."+topic+".answer",p)}</p>
               </details>
-            ))}
+            })}
           </div>
         ) : path === "/notifications" ? (
           <section className="card">

@@ -1,4 +1,4 @@
-import { useContent } from "../../content";
+import { useContent, contentImage } from "../../content";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
@@ -55,9 +55,10 @@ export function CinematicPlayer({
     [sourceEnabled, setSourceEnabled] = useState(flags.media !== "slow"),
     [retry, setRetry] = useState(0);
   const contentText = useContent();
+  const poster = first ? mediaAssets.poster : contentImage(contentText("home.promo.image",""),mediaAssets.poster);
   const campaignVideo = first ? "" : contentText("home.promo.video","");
   const sources = useMemo(() =>
-    /^\/(assets|brand-motion)\/[a-z0-9_./-]+\.(mp4|webm)$/i.test(campaignVideo)
+    /^\/(assets|brand-motion|api\/content-media)\/[a-z0-9_./-]+\.(mp4|webm)$/i.test(campaignVideo) && !campaignVideo.includes("..")
       ? [{src:campaignVideo,type:campaignVideo.endsWith(".webm")?"video/webm":"video/mp4"}]
       : selectFilmSources(),
     [campaignVideo, flags.media, flags.network, retry],
@@ -230,12 +231,12 @@ export function CinematicPlayer({
     >
       <div
         className="film-ambient"
-        style={{ backgroundImage: `url(${mediaAssets.poster})` }}
+        style={{ backgroundImage: `url(${poster})` }}
         aria-hidden="true"
       />
       <img
         className="film-poster"
-        src={mediaAssets.poster}
+        src={poster}
         alt="أبواب قاعة كويتية تفتح على حكاية مناسبة"
         fetchPriority="high"
       />
@@ -249,7 +250,7 @@ export function CinematicPlayer({
           muted={muted}
           autoPlay={!reduced}
           preload="auto"
-          poster={mediaAssets.poster}
+          poster={poster}
           controls={false}
           aria-label="فيلم هَبّ السعد — من أول هبّة تبدأ الحكاية"
           onCanPlay={onReady}

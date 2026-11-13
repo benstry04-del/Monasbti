@@ -125,6 +125,7 @@ const realApi: any = {
   calendar(month:string){return request('/calendar?month='+month);},
   records(kind:string,params:any={}){return request('/records/'+kind+'?'+new URLSearchParams(Object.entries(params).filter(([,v])=>v!==undefined && v!==null).map(([k,v])=>[k,String(v)])));},
   adminIntegrations(){return request('/admin/integrations');},
+  delivery(id:string){return request("/notification-deliveries/"+encodeURIComponent(id));},
   deliveries(page=1,status=''){return request('/notification-deliveries?page='+page+'&status='+encodeURIComponent(status));},
   integrationAction(id:string,action:string,payload:any){return request('/admin/integrations/'+encodeURIComponent(id)+'/'+action,payload);},
   settlements(page=1) { return request('/settlements?page='+page); },

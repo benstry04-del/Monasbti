@@ -1,3 +1,4 @@
+import { useContent } from "../../content";
 import React, { useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { MotionStage } from "./MotionStage";
@@ -28,6 +29,7 @@ export function BrandedLoader({
   progress?: number;
   message?: string;
 }) {
+  const contentText = useContent();
   return (
     <div
       className={"branded-loader branded-loader--" + mode}
@@ -42,7 +44,7 @@ export function BrandedLoader({
         size={mode === "fullscreen" ? "splash" : "loader"}
       />
       <p className="loading-copy">
-        {message || loadingMessages[context] || loadingMessages.generic}
+        {message || contentText("motion.loading."+context,loadingMessages[context] || loadingMessages.generic)}
       </p>
       {typeof progress === "number" && Number.isFinite(progress) && (
         <div className="true-progress">
@@ -73,6 +75,7 @@ export function ContextualLoader({
   context?: string;
   mode?: string;
 }) {
+  const contentText = useContent();
   const visible = useDelayedVisible(pending);
   if (!visible) return null;
   return mode === "micro" ? (
@@ -80,7 +83,7 @@ export function ContextualLoader({
   ) : mode === "inline" ? (
     <span className="contextual-inline" role="status">
       <MicroLoader />
-      {loadingMessages[context] || loadingMessages.generic}
+      {contentText("motion.loading."+context,loadingMessages[context] || loadingMessages.generic)}
     </span>
   ) : (
     <BrandedLoader mode={mode} context={context} />

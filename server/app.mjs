@@ -171,10 +171,11 @@ export async function createApp(options = {}) {
     const path = request.url.split("?")[0];
     if (path.startsWith("/api/backoffice/") || path.startsWith("/api/auth/") ||
         path.startsWith("/api/catalog/") || path.startsWith("/api/availability") ||
-        path === "/api/state" || path === "/api/commands" || path === "/api/content") return;
+        path === "/api/state" || path === "/api/commands" || path === "/api/content" || path.startsWith("/api/content-media/")) return;
     const permissions = [
       [/^\/api\/calendar$/, "orders.view"],
       [/^\/api\/report-summary$/, "reports.view"],
+      [/^\/api\/notification-deliveries(?:\/|$)/, "notifications.view"],
 
       [/^\/api\/(?:contracts|documents\/quote)\//, "contracts.view"],
       [/^\/api\/(?:payments|documents\/receipt)\//, "payments.view"],

@@ -75,6 +75,19 @@ export async function registerDeliveryRoutes(app){
     const items=(await db.query("SELECT id,job_id,channel,provider,provider_message_id,status,error_code,created_at,updated_at FROM notification_deliveries WHERE ($1='' OR status=$1) ORDER BY created_at DESC,id LIMIT 25 OFFSET $2",[status,(page-1)*25])).rows;
     return {items,page,hasMore:items.length===25};
   });
+  app.get("/api/notification-deliveries/:id",auth,async request=>{
+    if(!["admin","staff"].includes(request.actor.role)) throw integrationError("غير مخول",403);
+    const id=z.uuid().parse(request.params.id);
+    const item=(await db.query(
+      "SELECT id,job_id,channel,provider,provider_message_id,status,error_code,created_at,updated_at FROM notification_deliveries WHERE id=$1",[id],
+    )).rows[0];
+    if(!item) throw integrationError("سجل الإشعار غير موجود",404);
+    const events=(await db.query(
+      "SELECT status,error_code,created_at FROM notification_delivery_events WHERE provider=$1 AND message_id=$2 ORDER BY created_at DESC LIMIT 100",
+      [item.provider,item.provider_message_id],
+    )).rows;
+    return {item,events};
+  });
   app.post('/api/webhooks/resend',{config:{csrf:false,rawBody:true},bodyLimit:65536},async(req,reply)=>{
     const secret=integrationEnvironment().RESEND_WEBHOOK_SECRET;if(!secret)throw integrationError('تتبع البريد غير مهيأ',503);
     let event;try{new Webhook(secret).verify(req.rawBody,{'svix-id':req.headers['svix-id'],'svix-timestamp':req.headers['svix-timestamp'],'svix-signature':req.headers['svix-signature']});event=JSON.parse(req.rawBody);}catch{throw integrationError('توقيع إشعار البريد غير صالح',401);}

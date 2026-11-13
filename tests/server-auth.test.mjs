@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { hashPassword, verifyPassword, tokenHash, encryptSecret, decryptSecret, encodeBase32, totp, verifyTotp } from '../server/security.mjs';
 import { getConfig } from '../server/config.mjs';
-import { createApp } from '../server/app.mjs';
 process.env.DATABASE_URL = 'pglite:memory';
 process.env.NODE_ENV = 'test';
 let app, db;
 const cfg = getConfig({ NODE_ENV: 'test', COOKIE_SECRET: 'a'.repeat(48), ENCRYPTION_KEY: 'bc'.repeat(32), APP_ORIGIN: 'http://localhost:5173' });
 before(async () => {
+  const { createApp } = await import('../server/app.mjs');
   db = await import('../server/db.mjs');
   const { migrate } = await import('../server/migrate.mjs'); await migrate();
   app = await createApp({ db, config: cfg, logger: false, registerIntegrations: false, business: {

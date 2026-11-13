@@ -730,12 +730,56 @@ export async function executeCommand(
     if (p.email) p.email = z.email().parse(p.email);
     if (p.id && !s.suppliers.some(supplier=>supplier.id===p.id)) fail("المورد غير موجود",404);
   }
+  if (action === "CATALOG_SAVE" && actor?.staffRoleId && !hasPermission(actor,"costs.view")) {
+    const previous = s.services.find(item=>item.id===p.id);
+    p.cost = previous?.cost ?? null;
+    delete p.markup;
+  }
+  if (action === "PACKAGE_SAVE") {
+    p.capacity = z.number().int().positive().max(100000).parse(p.capacity);
+    const ids = z.array(z.string().min(1)).min(1).max(50).parse(p.serviceIds);
+    if (new Set(ids).size !== ids.length || ids.some(id=>!s.services.some(item=>item.id===id)))
+      fail("خدمات الباقة يجب أن تكون مختلفة وموجودة");
+    if (p.configuration !== undefined) {
+      p.configuration = z.object({
+        minGuests:z.number().int().min(1).max(100000),
+        maxGuests:z.number().int().min(1).max(100000),
+        pricing:z.enum(["fixed","per-guest"]),
+        options:z.array(z.object({name:z.string().trim().min(1).max(120),surcharge:z.number().min(0).max(100000)}).strict()).max(20),
+        extraServiceIds:z.array(z.string().min(1)).max(30),
+      }).strict().parse(p.configuration);
+      const config=p.configuration;
+      if (config.minGuests > p.capacity || config.maxGuests < p.capacity ||
+          new Set(config.options.map(option=>option.name)).size !== config.options.length ||
+          new Set(config.extraServiceIds).size !== config.extraServiceIds.length ||
+          config.extraServiceIds.some(id=>ids.includes(id) || !s.services.some(item=>item.id===id)))
+        fail("راجع حدود الضيوف والخيارات والخدمات الإضافية");
+    }
+  }
   if (action === "SETTINGS" && p.workflow !== undefined)
     p.workflow = z.object({
       supplierReview: z.boolean(),
       staffReview: z.boolean(),
       approval: z.enum(["owner", "delegated"]),
+      delegatedRoleId: z.uuid().nullable().optional(),
+      delegatedLimit: z.number().min(0).max(10000000).nullable().optional(),
     }).strict().parse(p.workflow);
+  if (action === "SETTINGS" && p.workflow?.delegatedRoleId &&
+      !(await rows(c,"SELECT 1 FROM staff_roles WHERE id=$1 AND active",[p.workflow.delegatedRoleId])).length)
+    fail("اختر دورًا وظيفيًا نشطًا للاعتماد",409);
+  if (action === "PUBLISH" && s.settings.workflow?.approval === "delegated" && !o.ownerApproved) {
+    const policy = s.settings.workflow;
+    const reviewers = o.approvals.filter(approval=>approval.role==="staff").map(approval=>approval.actorId);
+    const eligible = await rows(c,`SELECT u.id FROM users u LEFT JOIN staff_roles r ON r.id=u.staff_role_id
+      WHERE u.role='staff' AND u.active AND u.id IN (SELECT jsonb_array_elements_text($1::jsonb))
+        AND ($2::uuid IS NULL OR r.id=$2)
+        AND (u.staff_role_id IS NULL OR (r.active AND r.permissions ? 'orders.approve'))`,
+      [JSON.stringify(reviewers),policy.delegatedRoleId ?? null]);
+    if (!eligible.length) fail("يلزم اعتماد المالك أو موظف يملك التفويض الحالي",409);
+    const total = totals(o.lines,o.discount,0,s.settings.taxRate || 0).total;
+    if (policy.delegatedLimit != null && total > policy.delegatedLimit)
+      fail("قيمة العرض تتجاوز حد التفويض وتتطلب اعتماد المالك",409);
+  }
   if (action === "SETTINGS" && p.taxRate !== undefined)
     z.number().min(0).max(100).parse(p.taxRate);
   if (action === "PROFILE") {
@@ -836,6 +880,7 @@ export async function executeCommand(
       items: z.array(z.object({
         id:z.string().min(1).max(150), kind:z.enum(["service","package"]),
         qty:z.number().int().min(1).max(10000).optional(), option:z.string().max(120).optional(),
+        extras:z.array(z.string().max(150)).max(30).optional(),
       }).strict()).min(1).max(100),
       discount:z.number().min(0).optional(),
     }).strict().parse(p);
@@ -851,7 +896,7 @@ export async function executeCommand(
     try {
       for (const item of details.items)
         s.cart = dispatch(s, item.kind === "package" ? "CART_PACKAGE" : "CART_ADD", {
-          id:item.id, qty:item.qty, option:item.option, guests:details.occasion.guests,
+          id:item.id, qty:item.qty, option:item.option, extras:item.extras, guests:details.occasion.guests,
         }).cart;
     } catch (error) {
       fail(error.message, 409);
@@ -885,7 +930,7 @@ export async function executeCommand(
         const planner = { ...s, cart: [] };
         try {
           cart.push(...dispatch(planner, "CART_PACKAGE", {
-            id: packageId, guests: line.packageGuests || s.planner.guests, option: line.option,
+            id: packageId, guests: line.packageGuests || s.planner.guests, option: line.option, extras:line.packageExtras,
           }).cart);
         } catch (error) {
           fail(error.message, 409);
@@ -955,7 +1000,7 @@ export async function executeCommand(
       !["REQUESTED", "INTERNAL_REVIEW", "SUPPLIER_CONFIRMATION", "SUPPLIER_UNAVAILABLE",
         "QUOTE_READY", "NEEDS_OWNER_APPROVAL", "NEEDS_CHANGES", "CUSTOMER_REVIEW"].includes(o.status))
       fail("حالة الطلب تتطلب إجراء العقد أو الإلغاء المالي", 409);
-    if (decision !== "review" && actor.role !== "admin") fail("الإلغاء والرفض يتطلبان صلاحية المالك", 403);
+    if (decision !== "review" && actor.role !== "admin" && !(actor.staffRoleId && hasPermission(actor,"orders.cancel"))) fail("الإلغاء والرفض يتطلبان تفويضًا صريحًا", 403);
     o.status = decision === "review" ? "INTERNAL_REVIEW" : "CANCELLED";
     o.timeline.push({ status: o.status, reason, at: new Date().toISOString() });
     o.notes.push({ text: reason, actor: actor.name, at: new Date().toISOString() });
