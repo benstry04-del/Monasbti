@@ -13,13 +13,17 @@ const fingerprint=lines=>JSON.stringify(lines.map(l=>({id:l.id,supplierId:l.supp
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 export async function requestSignature(db,actor,input,{ip=null,provider=new SignatureBridge()}={}){
   if(actor?.role!=='customer')throw integrationError('التوقيع متاح لصاحب العقد',403);
-  const p=z.object({bookingId:z.string().min(1).max(150),consent:z.literal(true),signature:z.string().trim().min(2).max(120)}).strict().parse(input);
+  const p=z.object({bookingId:z.string().min(1).max(150),consent:z.literal(true),contractVersion:z.number().int().positive().optional(),signature:z.string().trim().min(2).max(120)}).strict().parse(input);
   return db.transaction(async c=>{
     const booking=(await c.query('SELECT * FROM bookings WHERE id=$1 FOR UPDATE',[p.bookingId])).rows[0];
     if(!booking || booking.customer_id!==actor.id)throw integrationError('العقد غير متاح',404);
     if(['CANCELLED','EXPIRED','COMPLETED'].includes(booking.status))throw integrationError('حالة الطلب لا تسمح بطلب توقيع',409);
     const contract=(await c.query('SELECT * FROM contracts WHERE booking_id=$1 AND version=$2 FOR UPDATE',[booking.id,booking.data.contract?.version || 0])).rows[0];
+    if(!booking.data.lines.every(line => line.response === "CONFIRMED_SUPPLIER"))
+      throw integrationError("يلزم تحقق الفريق من توفر جميع الخدمات قبل التوقيع",409);
     if(!contract || contract.status!=='APPROVED')throw integrationError('يلزم عقد معتمد غير موقع',409);
+    if (p.contractVersion !== undefined && p.contractVersion !== contract.version)
+      throw integrationError("تغير إصدار العقد؛ راجع النسخة الجديدة",409);
     const existing=(await c.query('SELECT * FROM signature_requests WHERE contract_id=$1',[contract.id])).rows[0];
     if(existing){await enqueue(c,'SIGNATURE_RECONCILE',{signatureId:existing.id},'signature-refresh:'+existing.id+':'+Math.floor(Date.now()/60000));return {id:existing.id,status:existing.status};}
     if(integrationEnvironment().ESIGNATURE_MODE!=='bridge')throw integrationError('لم تُفعّل جهة توقيع خارجية لهذا العقد',409);

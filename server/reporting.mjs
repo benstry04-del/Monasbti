@@ -1,3 +1,4 @@
+import { hasPermission } from "../src/staff-permissions.mjs";
 import {z} from 'zod';
 import {httpError} from './security.mjs';
 export async function reportSummary(c,{period=6,occasion=''}={}){
@@ -7,15 +8,38 @@ export async function reportSummary(c,{period=6,occasion=''}={}){
     COALESCE(sum(COALESCE((b.data->'financials'->>'total')::numeric*1000,(b.data->'contract'->>'total')::numeric*1000,GREATEST(0,COALESCE(l.subtotal,0)-COALESCE((b.data->>'discount')::numeric*1000,0)))) FILTER(WHERE b.status NOT IN ('CANCELLED','EXPIRED')),0)/1000.0 AS total,
     COALESCE(sum(GREATEST(0,COALESCE(l.subtotal,0)-COALESCE((b.data->>'discount')::numeric*1000,0))-l.cost) FILTER(WHERE l.known AND b.status NOT IN ('CANCELLED','EXPIRED')),0)/1000.0 AS profit
     FROM bookings b LEFT JOIN LATERAL(SELECT sum(price_minor*qty) AS subtotal,sum(cost_minor*qty) AS cost,bool_and(cost_minor IS NOT NULL) AS known FROM order_lines WHERE booking_id=b.id) l ON true WHERE ${where}`,params)).rows[0];
-  const actual=(await c.query(`SELECT COALESCE(sum(p.net_minor),0)/1000.0 AS amount FROM payment_valuations p JOIN bookings b ON b.id=p.booking_id WHERE p.status IN ('PAID','REFUND_PENDING','REFUNDED') AND ${where}`,params)).rows[0];
-  const months=(await c.query(`SELECT to_char(p.created_at AT TIME ZONE 'Asia/Kuwait','YYYY-MM') AS month,sum(p.net_minor)/1000.0 AS revenue,sum(p.net_minor*p.cost_minor/NULLIF(p.document_total_minor,0))/1000.0 AS cost,sum(p.net_minor*p.document_tax_minor/NULLIF(p.document_total_minor,0))/1000.0 AS tax FROM payment_valuations p JOIN bookings b ON b.id=p.booking_id WHERE p.status IN ('PAID','REFUND_PENDING','REFUNDED') AND p.created_at>=date_trunc('month',now())-($1::int-1)*interval '1 month' AND ($2='' OR b.data->'occasion'->>'type'=$2) GROUP BY month ORDER BY month`,params)).rows;
-  return {total:Number(rows.total),profit:Number(rows.profit),actual:Number(actual.amount),count:Number(rows.bookings),quotes:Number(rows.quotes),contracts:Number(rows.contracts),paid:Number(rows.paid),months:months.map(r=>({month:r.month,revenue:Number(r.revenue),cost:Number(r.cost || 0),tax:Number(r.tax || 0)}))};
+  const actual=(await c.query(`SELECT COALESCE(sum(p.net_minor),0)/1000.0 AS amount FROM payment_valuations p JOIN bookings b ON b.id=p.booking_id WHERE p.status IN ('PAID','REFUND_PENDING','REFUNDED') AND p.created_at >= (date_trunc('month',now() AT TIME ZONE 'Asia/Kuwait')-($1::int-1)*interval '1 month') AT TIME ZONE 'Asia/Kuwait'
+      AND ($2='' OR b.data->'occasion'->>'type'=$2)`,params)).rows[0];
+  const months=(await c.query(`SELECT to_char(p.created_at AT TIME ZONE 'Asia/Kuwait','YYYY-MM') AS month,sum(p.net_minor)/1000.0 AS revenue,sum(p.net_minor*p.cost_minor/NULLIF(p.document_total_minor,0))/1000.0 AS cost,sum(p.net_minor*p.document_tax_minor/NULLIF(p.document_total_minor,0))/1000.0 AS tax FROM payment_valuations p JOIN bookings b ON b.id=p.booking_id WHERE p.status IN ('PAID','REFUND_PENDING','REFUNDED') AND p.created_at >= (date_trunc('month',now() AT TIME ZONE 'Asia/Kuwait')-($1::int-1)*interval '1 month') AT TIME ZONE 'Asia/Kuwait' AND ($2='' OR b.data->'occasion'->>'type'=$2) GROUP BY month ORDER BY month`,params)).rows;
+  const expense = (await c.query(`SELECT COALESCE(sum(e.paid_minor),0)/1000.0 AS paid
+    FROM admin_expenses e LEFT JOIN bookings b ON b.id=e.booking_id
+    WHERE e.expense_date >= (date_trunc('month',now() AT TIME ZONE 'Asia/Kuwait')-($1::int-1)*interval '1 month')::date
+      AND e.expense_date <= (now() AT TIME ZONE 'Asia/Kuwait')::date AND ($2='' OR b.data->'occasion'->>'type'=$2)`,params)).rows[0];
+  const operatingExpenses = Number(expense.paid);
+  const directCosts = months.reduce((sum,row)=>sum+Number(row.cost || 0),0);
+  const grossProfit = months.reduce((sum,row)=>sum+Number(row.revenue)-Number(row.cost || 0)-Number(row.tax || 0),0);
+  return {operatingExpenses,directCosts,grossProfit,netProfit:grossProfit-operatingExpenses,total:Number(rows.total),profit:Number(rows.profit),actual:Number(actual.amount),count:Number(rows.bookings),quotes:Number(rows.quotes),contracts:Number(rows.contracts),paid:Number(rows.paid),months:months.map(r=>({month:r.month,revenue:Number(r.revenue),cost:Number(r.cost || 0),tax:Number(r.tax || 0)}))};
 }
 export async function registerReportingRoutes(app){
   const auth={preHandler:app.authenticate};
   app.get('/api/report-summary',auth,req=>{
     if(!['admin','staff'].includes(req.actor.role))throw httpError(403,'غير مخول');
-    return app.db.transaction(c=>reportSummary(c,req.query),{readOnly:true});
+    return app.db.transaction(async c=>{
+      const result=await reportSummary(c,req.query);
+      if (!hasPermission(req.actor,"profit.view")) {
+        delete result.profit;
+        delete result.grossProfit;
+        delete result.netProfit;
+      }
+      if (!hasPermission(req.actor,"costs.view")) delete result.directCosts;
+      if (!hasPermission(req.actor,"expenses.view")) {
+        delete result.operatingExpenses;
+        delete result.netProfit;
+      }
+      if (!hasPermission(req.actor,"costs.view") || !hasPermission(req.actor,"profit.view"))
+        result.months = result.months.map(({month,revenue}) => ({month,revenue}));
+      return result;
+    },{readOnly:true});
   });
   app.get('/api/calendar',auth,req=>{
     const month=z.string().regex(/^(?:19|20|21)\d{2}-(0[1-9]|1[0-2])$/).parse(req.query.month),params=[month+'-01'];let scope='true';

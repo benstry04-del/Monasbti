@@ -1,3 +1,4 @@
+import { hasPermission } from "../src/staff-permissions.mjs";
 import {z} from 'zod';
 import {Readable} from 'node:stream';
 import {readState} from './business.mjs';
@@ -5,8 +6,17 @@ import {httpError} from './security.mjs';
 import {labels,pricing} from '../src/domain.mjs';
 const paging=z.object({page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(25),q:z.string().max(100).default(''),status:z.string().max(50).default('')}).passthrough();
 const privileged=a=>['admin','staff'].includes(a?.role);
+const queryContractAccess=(raw,actor)=>raw.kind==="contracts" && hasPermission(actor,"contracts.view");
 function plan(kind,actor,raw){
   if(!actor)throw httpError(401,'يلزم تسجيل الدخول');
+  if (actor.staffRoleId) {
+    const permission = {
+      bookings:"orders.view",payments:"payments.view",customers:"customers.view",
+      suppliers:"suppliers.view",services:"catalog.view",packages:"catalog.view",audit:"audit.view",
+    }[kind];
+    const contractAccess = kind === "bookings" && queryContractAccess(raw,actor);
+    if (!contractAccess && (!permission || !hasPermission(actor,permission))) throw httpError(403,"غير مخول");
+  }
   const query=paging.parse(raw),params=[],where=[];const bind=v=>{params.push(v);return '$'+params.length;};
   let from,select,search,order='t.created_at DESC,t.id';
   if(kind==='bookings'){
@@ -14,7 +24,6 @@ function plan(kind,actor,raw){
     if(actor.role==='customer')where.push('t.customer_id='+bind(actor.id));
     else if(actor.role==='supplier')where.push('EXISTS(SELECT 1 FROM order_lines l WHERE l.booking_id=t.id AND l.supplier_id='+bind(actor.supplierId)+')');
     else if(!privileged(actor))throw httpError(403,'غير مخول');
-    if(query.id)where.push('t.id='+bind(z.string().max(100).parse(query.id)));
     if(query.kind==='execution')where.push("t.status IN ('CONFIRMED','PREPARATION','IN_PROGRESS','COMPLETED')");
     if(query.response && actor.role==='supplier')where.push("EXISTS(SELECT 1 FROM order_lines l WHERE l.booking_id=t.id AND l.supplier_id="+bind(actor.supplierId)+" AND l.data->>'response'="+bind(z.enum(['WAITING','CONFIRMED_SUPPLIER','REJECTED']).parse(query.response))+')');
     if(query.kind==='contracts')where.push("t.data->'contract' IS NOT NULL AND t.data->'contract'<>'null'::jsonb");
@@ -30,6 +39,7 @@ function plan(kind,actor,raw){
     if(kind==='users'?(actor.role!=='admin'):!privileged(actor))throw httpError(403,'غير مخول');
     from='users t';search="t.name || ' ' || t.email || ' ' || t.mobile";
     select='t.id,t.email,t.name,t.mobile,t.role,t.active,t.supplier_id,t.mfa_secret IS NOT NULL AS mfa';
+    if(kind==='users') where.push("t.role<>'supplier'");
     if(kind==='customers'){
       where.push("t.role='customer'");
       select+=`,(SELECT count(*) FROM bookings b WHERE b.customer_id=t.id) AS booking_count,
@@ -55,6 +65,7 @@ function plan(kind,actor,raw){
     from='tickets t';select='t.*';search="t.id || ' ' || COALESCE(t.data->>'subject','')";
     if(!privileged(actor))where.push('t.user_id='+bind(actor.id));
   }else throw httpError(404,'السجل غير موجود');
+  if(query.id)where.push('t.id::text='+bind(z.string().max(150).parse(query.id)));
   if(query.q)where.push('('+search+') ILIKE '+bind('%'+query.q+'%'));
   if(query.status && ['bookings','payments'].includes(kind))where.push('t.status='+bind(query.status));
   return {query,params,from,select,where:where.length?where.join(' AND '):'true',order};
@@ -66,13 +77,19 @@ export async function readRecordPage(db,actor,visitorId,kind,raw={}){
     const found=(await c.query(`SELECT ${p.select} FROM ${p.from} WHERE ${p.where} ORDER BY ${p.order} LIMIT $${p.params.length+1} OFFSET $${p.params.length+2}`,[...p.params,p.query.pageSize,(p.query.page-1)*p.query.pageSize])).rows;
     let items;
     if(kind==='bookings')items=(await readState(c,actor,visitorId,false,null,{light:true,bookingIds:found.map(r=>r.id)})).orders;
-    else if(kind==='payments')items=found.map(r=>({...r.data,id:r.id,orderId:r.booking_id,customer:r.customer_name,amount:Number(r.amount_minor)/1000,refunded:Number(r.refunded_minor)/1000,status:r.status,milestone:r.milestone,method:r.data.method || r.provider,at:r.created_at,receipt:r.data.receipt || r.provider_reference || r.id}));
+    else if(kind==='payments')items=found.map(r=>({...(actor.staffRoleId?{}:r.data),id:r.id,orderId:r.booking_id,customer:r.customer_name,amount:Number(r.amount_minor)/1000,refunded:Number(r.refunded_minor)/1000,status:r.status,milestone:r.milestone,method:r.data.method || r.provider,at:r.created_at,receipt:r.data.receipt || r.provider_reference || r.id}));
     else if(kind==='audit')items=found.map(r=>({id:r.id,actor:r.actor_name || r.actor_id,action:r.action,entity:r.resource_id,before:r.before_data,after:r.after_data,at:r.created_at}));
     else if(kind==='users' || kind==='customers')items=found.map(r=>({...r,supplierId:r.supplier_id,bookingCount:Number(r.booking_count || 0),paidTotal:Number(r.paid_total || 0),recentBookings:r.recent_bookings || []}));
     else if(kind==='suppliers')items=found.map(r=>({...r.data,id:r.id,name:r.name,active:r.active,response:Number(r.response_percent),reliability:Number(r.reliability_percent),rating:Number(r.actual_rating),openOrderCount:Number(r.open_order_count),costExposure:Number(r.cost_exposure)}));
     else if(kind==='services')items=found.map(r=>({...r.data,id:r.id,available:r.active,capacity:r.capacity}));
     else if(kind==='packages')items=found.map(r=>({...r.data,id:r.id,active:r.active}));
     else items=found.map(r=>({...r.data,id:r.id,userId:r.user_id,at:r.created_at}));
+    if (actor.staffRoleId && kind === "audit" && ["costs.view","profit.view","discounts.view"].some(permission=>!hasPermission(actor,permission)))
+      items = items.map(({before,after,...item})=>item);
+    if (actor.staffRoleId && !hasPermission(actor,"costs.view")) {
+      if (kind === "services" || kind === "packages") items = items.map(({cost,markup,...item}) => item);
+      if (kind === "suppliers") items = items.map(({costExposure,payoutRecipientId,...item}) => item);
+    }
     let counts;
     if(kind==='bookings')counts=Object.fromEntries((await c.query(`SELECT t.status,count(*) AS n FROM ${p.from} WHERE ${p.where} GROUP BY t.status`,p.params)).rows.map(r=>[r.status,Number(r.n)]));
     let summary;
@@ -90,6 +107,8 @@ export async function registerRecordRoutes(app){
   app.get('/api/records/:kind',auth,req=>readRecordPage(db,req.actor,req.visitorId,req.params.kind,req.query));
   app.get('/api/records/:kind/export',auth,async(req,reply)=>{
     plan(req.params.kind,req.actor,req.query);
+    const permission = {bookings:"orders.export",payments:"payments.export",audit:"audit.export"}[req.params.kind];
+    if (req.actor.staffRoleId && !hasPermission(req.actor,permission)) throw httpError(403,"غير مخول");
     if(!['bookings','payments','audit'].includes(req.params.kind))throw httpError(400,'نوع التصدير غير متاح');
     const json=req.params.kind==='audit';
     async function* output(){

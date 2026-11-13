@@ -1,4 +1,7 @@
-import { staffAllowed } from "./auth-navigation";
+import { useContent } from "./content";
+import { canOpenAdminPage } from "./auth-navigation";
+import { hasPermission } from "./staff-permissions.mjs";
+import { AssistedBooking, BackofficeRecords, ContentManager, RolesManager, RecordDetails } from "./backoffice-ui";
 import { BrandedLoader } from "./components/brand-motion/BrandedLoader";
 import {BrandSettings} from "./brand-settings";
 import {branding} from "./branding.mjs";
@@ -73,8 +76,13 @@ import {
 import { api, useStore, isDemo } from "./store";
 import { Settlements } from "./settlements-ui";
 import { IntegrationSettings, DeliveryHistory } from './integration-settings-ui';
-import { categories, occasions, labels, money, pricing } from "./domain.mjs";
+import { categories, occasions, labels, money, pricing, packageIdOf } from "./domain.mjs";
 const adminNav: any[] = [
+  ["assisted", "حجز نيابة عن عميل", Plus],
+  ["expenses", "المصروفات", Wallet],
+  ["procurement", "طلبات التوريد", PackageCheck],
+  ["roles", "الأدوار والصلاحيات", ShieldCheck],
+  ["content", "محتوى الموقع", FileText],
   ["", "لوحة الإدارة", LayoutDashboard],
   ["orders", "الطلبات", ClipboardList],
   ["quotes", "عروض الأسعار", FileText],
@@ -187,11 +195,11 @@ function Chart({ period = "6",analytics }: any) {
   );
 }
 const adminGroups = [
-  ["المتابعة اليومية", ["", "orders", "events", "customers"]],
+  ["المتابعة اليومية", ["", "orders", "assisted", "events", "customers"]],
   ["العروض والتعاقد", ["quotes", "approvals", "contracts"]],
-  ["الخدمات والموردون", ["suppliers", "catalog", "packages"]],
-  ["المالية والتقارير", ["payments", "settlements", "reports"]],
-  ["إدارة النظام", ["integrations", "deliveries", "users", "audit", "settings"]],
+  ["الخدمات والموردون", ["suppliers", "procurement", "catalog", "packages"]],
+  ["المالية والتقارير", ["payments", "settlements", "expenses", "reports"]],
+  ["إدارة النظام", ["integrations", "deliveries", "users", "roles", "content", "audit", "settings"]],
 ] as const;
 
 function AdminNavigation({ state, page, visible = true, onNavigate, onClose }: any) {
@@ -227,7 +235,7 @@ function AdminNavigation({ state, page, visible = true, onNavigate, onClose }: a
   const groups = adminGroups.map(([label, routes]) => ({
     label,
     items: routes.map(route => adminNav.find(item => item[0] === route))
-      .filter(item => item && (owner || staffAllowed.includes(item[0])) &&
+      .filter(item => item && canOpenAdminPage(state.session,item[0]) &&
         (!term || normalize(label + " " + item[1]).includes(term))),
   })).filter(group => group.items.length);
 
@@ -281,9 +289,9 @@ export function Admin(props: any) {
     return () => desktop.removeEventListener("change", closeOnDesktop);
   }, []);
   let title = adminNav.find((n) => n[0] === page)?.[1] || "تفاصيل الطلب";
-  const allowed = s.session.role !== "staff" || staffAllowed.includes(page);
+  const allowed = canOpenAdminPage(s.session,page);
   const routeError = !isDemo && s.runtime?.route === path && s.runtime?.error;
-  const waitingForRoute = !isDemo && (!page || (page === "orders" && id)) && s.runtime?.route !== path;
+  const waitingForRoute = !isDemo && (!page || (["orders","contracts","quotes"].includes(page) && id)) && s.runtime?.route !== path;
   return (
     <div className="admin-shell">
       <aside className="admin-sidebar admin-workspace-sidebar">
@@ -335,7 +343,17 @@ export function Admin(props: any) {
             <div className="admin-section-loading" role="status">جارٍ تحميل بيانات القسم…</div>
           ) : page === "" ? (
             <AdminOverview {...props} />
-          ) : page === "orders" && id ? (
+          ) : page === "roles" ? (
+            <RolesManager />
+          ) : page === "assisted" ? (
+            <AssistedBooking {...props} />
+          ) : page === "expenses" || page === "procurement" ? (
+            <BackofficeRecords kind={page} id={id} s={s} />
+          ) : page === "content" ? (
+            <ContentManager s={s} />
+          ) : id && ["payments","customers","users","audit","catalog","packages"].includes(page) ? (
+            <RecordDetails kind={page === "catalog" ? "services" : page} id={id} back={"/admin/"+page} />
+          ) : ["orders","contracts","quotes"].includes(page) && id ? (
             <OrderEditor {...props} id={id} />
           ) : page === "orders" ||
             page === "quotes" ||
@@ -353,7 +371,7 @@ export function Admin(props: any) {
           ) : page === "catalog" || page === "packages" ? (
             <ManageCatalog {...props} packages={page === "packages"} />
           ) : page === "suppliers" ? (
-            <Suppliers {...props} />
+            <Suppliers {...props} id={id} />
           ) : page === "customers" ? (
             <Customers {...props} />
           ) : page === "events" ? (
@@ -770,9 +788,18 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
     [note, setNote] = useState("");
   if (!o) return <Empty title="الطلب غير موجود" to="/admin/orders" />;
   const lines = local || o.lines,
-    d = discount === null ? o.discount : discount,
+    d = discount === null ? (o.discount ?? 0) : discount,
     t = pricing(lines, Number(d));
   const isSigned = o.contract?.status === "SIGNED";
+  const contractIssued = Boolean(o.contract);
+  const canEdit = hasPermission(s.session,"orders.edit");
+  const canCost = hasPermission(s.session,"costs.view");
+  const canProfit = hasPermission(s.session,"profit.view") && canCost;
+  const canDiscount = hasPermission(s.session,"discounts.view");
+  const canVerify = hasPermission(s.session,"suppliers.edit");
+  const canApprove = hasPermission(s.session,"orders.approve");
+  const editableStatus = ["REQUESTED","INTERNAL_REVIEW","SUPPLIER_CONFIRMATION","SUPPLIER_UNAVAILABLE",
+    "QUOTE_READY","NEEDS_OWNER_APPROVAL","NEEDS_CHANGES","CUSTOMER_REVIEW"].includes(o.status);
   const updateLine = (i: number, key: string, value: any) => {
     const next = structuredClone(lines);
     next[i][key] = value;
@@ -788,14 +815,15 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           <Badge status={o.status} />
         </div>
         <div className="button-row">
-          <Btn
+          {canEdit && !contractIssued && <Btn
             variant="outline"
             onClick={() => act("REVIEW", { id }, "بدأت مراجعة الموردين")}
           >
             مراجعة الطلب
-          </Btn>
+          </Btn>}
           <Btn
             variant="outline"
+            disabled={!canEdit}
             onClick={() => act("RENEW", { id }, "تم تجديد العرض")}
           >
             تجديد العرض
@@ -807,6 +835,20 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           <OrderEvent o={o} />
         </div>
         <Progress status={o.status} />
+        {canEdit && editableStatus && !o.contract && <details><summary>تعديل بيانات المناسبة</summary>
+          <form className="settings-form" key={o.version} onSubmit={event=>{
+            event.preventDefault();const f=Object.fromEntries(new FormData(event.currentTarget));
+            act("ORDER_DETAILS",{id,expectedVersion:o.version,...f,guests:Number(f.guests)});
+          }}>
+            <Field label="نوع المناسبة"><input required name="type" defaultValue={o.occasion.type}/></Field>
+            <Field label="التاريخ"><input required type="date" name="date" defaultValue={o.occasion.date}/></Field>
+            <Field label="الموقع"><input required name="location" defaultValue={o.occasion.location}/></Field>
+            <Field label="الضيوف"><input required type="number" min={1} name="guests" defaultValue={o.occasion.guests}/></Field>
+            <Field label="التفاصيل"><textarea name="notes" defaultValue={o.occasion.notes}/></Field>
+            <Btn type="submit">حفظ المناسبة</Btn>
+          </form>
+        </details>}
+        {o.source==="ASSISTED" && <p>طلب منشأ نيابة عن العميل · {o.createdBy}</p>}
       </section>
       <div className="section-title section">
         <h2>التسعير وتأكيدات الموردين</h2>
@@ -818,10 +860,10 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             <thead>
               <tr>
                 <th>الخدمة / المورد</th>
-                <th>التكلفة د.ك</th>
+                {canCost && <th>التكلفة د.ك</th>}
                 <th>سعر البيع د.ك</th>
                 <th>الكمية</th>
-                <th>Markup</th>
+                {canProfit && <th>نسبة الزيادة</th>}
                 <th>التوفر</th>
                 <th>البديل</th>
               </tr>
@@ -835,12 +877,12 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                       {s.suppliers.find((v) => v.id === l.supplierId)?.name}
                     </small>
                   </td>
-                  <td>
+                  {canCost && <td>
                     <input
                       aria-label={"تكلفة " + l.title}
                       type="number"
                       min={0}
-                      disabled={isSigned}
+                      disabled={contractIssued || !canEdit}
                       value={l.cost ?? ""}
                       placeholder="غير مؤكدة"
                       onChange={(e) =>
@@ -851,30 +893,31 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                         )
                       }
                     />
-                  </td>
+                  </td>}
                   <td>
                     <input
                       aria-label={"سعر بيع " + l.title}
                       type="number"
                       min={1}
-                      disabled={isSigned}
+                      disabled={contractIssued || !canEdit}
                       value={l.price}
                       onChange={(e) =>
                         updateLine(i, "price", Number(e.target.value))
                       }
                     />
                   </td>
-                  <td>{l.qty}</td>
-                  <td>
+                  <td>{packageIdOf(l) || contractIssued || !canEdit ? l.qty : <input aria-label={"كمية "+l.title} type="number" min={1} max={10000} value={l.qty} onChange={event=>updateLine(i,"qty",Number(event.target.value))}/>}</td>
+                  {canProfit && <td>
                     {l.cost
                       ? (((l.price - l.cost) / l.cost) * 100).toFixed(1) + "%"
                       : "—"}
-                  </td>
+                  </td>}
                   <td>
                     <Badge status={l.response} />
+                    {l.verification?.reason && <small>{l.verification.reason}</small>}
                   </td>
                   <td>
-                    {l.response === "REJECTED" ? (
+                    {!canVerify ? null : l.response === "REJECTED" ? (
                       <>
                         <p>{l.alternative}</p>
                         <form
@@ -925,7 +968,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
                               id,
                               lineId: l.id,
                               response: "CONFIRMED_SUPPLIER",
-                              cost: l.cost,
+                              ...(canCost && l.cost != null ? {cost:l.cost} : {}),
                             },
                             "سبب التأكيد اليدوي",
                           )
@@ -943,7 +986,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           </table>
         </div>
         <div className="pricing-footer">
-          <Field label="الخصم (د.ك)">
+          {canDiscount && <Field label="الخصم (د.ك)">
             <input
               disabled={isSigned}
               type="number"
@@ -952,37 +995,37 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               value={d}
               onChange={(e) => setDiscount(Number(e.target.value))}
             />
-          </Field>
-          <div>
+          </Field>}
+          {canCost && <div>
             <small>إجمالي التكاليف</small>
             <Price value={t.cost} />
             {t.cost === null && <Badge status="PENDING">تكلفة غير مؤكدة</Badge>}
-          </div>
-          <div>
+          </div>}
+          {canProfit && <div>
             <small>الربح المتوقع</small>
             <Price value={t.profit} />
-          </div>
-          <div>
+          </div>}
+          {canProfit && <div>
             <small>هامش الربح</small>
             <strong
               className={t.margin < s.settings.threshold ? "danger" : "success"}
             >
               {t.margin === null ? "غير معروف" : t.margin.toFixed(1) + "%"}
             </strong>
-          </div>
+          </div>}
           <div>
             <small>إجمالي البيع</small>
             <Price value={t.total} />
           </div>
           <Btn
             disabled={
-              isSigned ||
+              !canEdit || contractIssued ||
               !lines.every((l) => l.price > 0) ||
               d < 0 ||
               d > t.subtotal
             }
             onClick={async () => {
-              if (await act("PRICE", { id, lines, discount: Number(d) })) {
+              if (await act("PRICE", { id, expectedVersion:o.version, lines, ...(canDiscount ? {discount:Number(d)} : {}) })) {
                 setLocal(null);
                 setDiscount(null);
               }
@@ -991,7 +1034,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             حفظ التسعير
           </Btn>
         </div>
-        {t.margin !== null && t.margin < s.settings.threshold && (
+        {canProfit && t.margin !== null && t.margin < s.settings.threshold && (
           <div className="warning">
             <AlertCircle />
             الهامش أقل من {s.settings.threshold}% — يتطلب اعتماد المالك قبل
@@ -1012,7 +1055,8 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             <ShieldCheck size={22} />
           </h3>
           <p>
-            مراجعة الموظف ثم اعتماد المالك. لا يعتمد نفس المستخدم المرحلتين.
+            {s.settings.workflow?.staffReview ?? s.settings.doubleApproval ? "مراجعة الموظف مطلوبة." : "مراجعة الموظف اختيارية."}{" "}
+            {s.settings.workflow?.approval === "delegated" ? "يمكن للموظف المخوّل اعتماد العرض." : "اعتماد العرض من صلاحية المالك."}
           </p>
           {o.approvals.map((a, i) => (
             <div className="list-row" key={i}>
@@ -1030,7 +1074,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           <div className="button-row">
             <Btn
               variant="outline"
-              disabled={isSigned}
+              disabled={contractIssued || !canApprove}
               onClick={() =>
                 ask(
                   "اعتماد المراجعة الداخلية",
@@ -1043,7 +1087,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               اعتماد {s.session.role === "admin" ? "المالك" : "الموظف"}
             </Btn>
             <Btn
-              disabled={isSigned}
+              disabled={contractIssued || !canApprove}
               onClick={() =>
                 act("PUBLISH", { id }, "تم إرسال العرض المعتمد للعميل")
               }
@@ -1051,20 +1095,11 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               إرسال عرض السعر
               <Send size={16} />
             </Btn>
-            <Btn
-              variant="text"
-              disabled={isSigned}
-              onClick={() =>
-                ask(
-                  "إعادة للمراجعة",
-                  "NOTE",
-                  { id },
-                  "سبب الرفض أو طلب التعديل",
-                )
-              }
-            >
-              طلب مراجعة
-            </Btn>
+            {canEdit && editableStatus && <Btn variant="outline" onClick={() => ask("إعادة الطلب للمراجعة", "ORDER_REVIEW_DECISION", { id, decision: "review" })}>إعادة للمراجعة</Btn>}
+            {editableStatus && s.session.role === "admin" && <Btn variant="text" onClick={() => ask("رفض الطلب", "ORDER_REVIEW_DECISION", { id, decision: "reject" })}>رفض الطلب</Btn>}
+            {editableStatus && s.session.role === "admin" && <Btn variant="text" onClick={() => ask("إلغاء الطلب", "ORDER_REVIEW_DECISION", { id, decision: "cancel" })}>إلغاء الطلب</Btn>}
+
+
           </div>
           {o.status === "DISPUTED" && (
             <Btn
@@ -1095,7 +1130,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               </small>
             </div>
           ))}
-          <form
+          {canEdit && <form
             onSubmit={async (e) => {
               e.preventDefault();
               if (await act("NOTE", { id, text: note })) setNote("");
@@ -1112,9 +1147,16 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
             <Btn type="submit" variant="outline">
               حفظ الملاحظة
             </Btn>
-          </form>
+          </form>}
         </section>
       </div>
+      {o.contract && hasPermission(s.session,"contracts.view") && <ContractDetails order={o} actor={s.session} act={act}/>}
+      {!!s.payments.length && <section className="card settings-form"><h3>دفعات الحجز</h3>
+        {s.payments.filter(payment=>payment.orderId===id).map(payment=><Link className="list-row" key={payment.id} to={"/admin/payments/"+payment.id}>
+          <span>{payment.receipt}</span><Price value={payment.amount}/><Badge status={payment.status}/>
+        </Link>)}
+      </section>}
+      {!isDemo && <BookingRelations id={id} version={o.version}/>}
       {o.amendment && <Amendment {...{ s, act, o }} />}
       <section className="card">
         <h3>الأنشطة الأخيرة</h3>
@@ -1132,6 +1174,51 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
       </section>
     </>
   );
+}
+function BookingRelations({id,version}) {
+  const related=useServerValue(()=>api.backoffice("/bookings/"+encodeURIComponent(id)+"/related"),id,version);
+  const info=related.value;
+  return <section className="card settings-form">
+    <h3>السجلات المرتبطة بالحجز</h3>
+    {related.error && <p role="alert">{related.error} <button onClick={related.retry}>إعادة المحاولة</button></p>}
+    {info?.customer && <Link className="list-row" to={"/admin/customers/"+info.customer.id}>{info.customer.name} · {info.customer.mobile || info.customer.email}</Link>}
+    {info?.purchase.map(row=><Link className="list-row" key={row.id} to={"/admin/procurement/"+row.id}>طلب توريد · {row.title}</Link>)}
+    {info?.expenses.map(row=><Link className="list-row" key={row.id} to={"/admin/expenses/"+row.id}>مصروف · {row.title} <Price value={Number(row.amount_minor)/1000}/></Link>)}
+    {info && <details><summary>سجل القرارات والتعديلات</summary>
+      {info.activity.map(row=><div className="list-row" key={row.id}>
+        <span>{row.action}</span><span>{row.name}</span><time>{new Date(row.created_at).toLocaleString("ar-KW")}</time>
+      </div>)}
+    </details>}
+  </section>;
+}
+function ContractDetails({order,actor,act}) {
+  const versions=useServerValue(()=>api.contractVersions(order.id),order.id,order.version);
+  const [selected,setSelected]=useState(null);
+  const version=selected || order.contract.version;
+  const preview="/api/contracts/"+encodeURIComponent(order.id)+"?preview=1&version="+version;
+  return <section className="card settings-form">
+    <h3>عقد المناسبة</h3>
+    <p>الإصدار الحالي {order.contract.version} · {order.contract.status==="SIGNED"?"موقّع":"بانتظار توقيع العميل"}</p>
+    {versions.error && <p role="alert">{versions.error}</p>}
+    <Field label="الإصدار">
+      <select value={version} onChange={event=>setSelected(Number(event.target.value))}>
+        {(versions.value || [{version:order.contract.version}]).map(item=><option key={item.version} value={item.version}>{item.version}</option>)}
+      </select>
+    </Field>
+    <div className="button-row">
+      <a className="btn outline" href={preview} target="_blank" rel="noreferrer">فتح العقد للطباعة أو الحفظ PDF</a>
+      <a className="btn outline" href={preview.replace("preview=1","format=pdf")} download>تنزيل PDF</a>
+      <a className="btn outline" href={"mailto:?subject="+encodeURIComponent("عقد المناسبة "+order.id)+"&body="+encodeURIComponent(location.origin+"/contract/"+order.id)}>مشاركة رابط العميل</a>
+    </div>
+    <iframe title="معاينة العقد" src={preview} loading="lazy" style={{width:"100%",minHeight:420,border:"1px solid var(--sand)"}}/>
+    {order.contract.status==="APPROVED" && hasPermission(actor,"contracts.edit") && <form key={order.version} onSubmit={event=>{
+      event.preventDefault();const terms=new FormData(event.currentTarget).get("terms");
+      act("CONTRACT_REVISE",{id:order.id,expectedVersion:order.version,terms});
+    }}>
+      <Field label="شروط النسخة الجديدة"><textarea required name="terms" rows={4} maxLength={10000} defaultValue={order.contract.terms}/></Field>
+      <Btn type="submit">إصدار نسخة معدلة</Btn>
+    </form>}
+  </section>;
 }
 function Payments({ s, act, setModal }: any) {
   const [filter, setFilter] = useState("all"),
@@ -1226,7 +1313,7 @@ function Payments({ s, act, setModal }: any) {
               {list.map((p) => (
                 <tr key={p.id}>
                   <td>
-                    {p.id}
+                    <Link to={"/admin/payments/"+p.id}>{p.id}</Link>
                     <small>{new Date(p.at).toLocaleString("ar-KW")}</small>
                   </td>
                   <td>
@@ -1557,7 +1644,7 @@ function ManageCatalog({ s, act, setModal, packages }: any) {
           <article className="card manage-card" key={x.id}>
             <img src={"/assets/" + x.image + ".jpg"} alt={x.title} />
             <div>
-              <h3>{x.title}</h3>
+              <h3><Link to={"/admin/"+(packages?"packages":"catalog")+"/"+x.id}>{x.title}</Link></h3>
               <p>{x.category || "باقة متكاملة"}</p>
               <Price value={x.price} />
               <div className="button-row">
@@ -1663,7 +1750,7 @@ function CategoryManager({ act }: any) {
     </>
   );
 }
-function Suppliers({ s, act, setModal }: any) {
+function Suppliers({ s, act, setModal, id }: any) {
   const [q, setQ] = useState("");
   const records=useRecordPage('suppliers',{q},s.suppliers.filter(v=>v.name.includes(q)),s.runtime?.refreshedAt);
   function edit(v: any = {}) {
@@ -1674,14 +1761,14 @@ function Suppliers({ s, act, setModal }: any) {
           onSubmit={async (e) => {
             e.preventDefault();
             const f = Object.fromEntries(new FormData(e.currentTarget));
-            if (await act("SUPPLIER_SAVE", { ...v, ...f, active: true }))
+            if (await act("SUPPLIER_SAVE", { id:v.id, ...f, active:v.active !== false }))
               setModal(null);
           }}
         >
           <Field label="اسم المورد">
             <input name="name" required defaultValue={v.name} />
           </Field>
-          <Field label="مرجع مستفيد جهة التحويل"><input name="payoutRecipientId" defaultValue={v.payoutRecipientId || ""} maxLength={160} /><small>مرجع المستفيد المعتمد لدى جهة التحويل؛ لا تُدخل بيانات بطاقة.</small></Field>
+          {s.session.role==="admin" && <Field label="مرجع مستفيد جهة التحويل"><input name="payoutRecipientId" defaultValue={v.payoutRecipientId || ""} maxLength={160} /><small>مرجع المستفيد المعتمد لدى جهة التحويل.</small></Field>}
           <Field label="المنطقة">
             <input
               name="area"
@@ -1689,6 +1776,11 @@ function Suppliers({ s, act, setModal }: any) {
               defaultValue={v.area || "جميع مناطق الكويت"}
             />
           </Field>
+          <Field label="الهاتف"><input name="phone" type="tel" maxLength={30} defaultValue={v.phone}/></Field>
+          <Field label="البريد"><input name="email" type="email" maxLength={254} defaultValue={v.email}/></Field>
+          <Field label="مناطق الخدمة"><input name="serviceAreas" maxLength={400} defaultValue={v.serviceAreas}/></Field>
+          <Field label="شروط التعامل"><textarea name="terms" maxLength={3000} defaultValue={v.terms}/></Field>
+          <Field label="ملاحظات التعامل"><textarea name="notes" maxLength={3000} defaultValue={v.notes}/></Field>
           <Field label="الفئة">
             <select name="category" defaultValue={v.category}>
               {categories.slice(1).map((c) => (
@@ -1701,6 +1793,42 @@ function Suppliers({ s, act, setModal }: any) {
       ),
     });
   }
+  if (id) {
+    const supplier=s.suppliers.find(item=>item.id===id);
+    if (!supplier) return <Empty title="ملف المورد غير متاح" to="/admin/suppliers"/>;
+    const canEdit=hasPermission(s.session,"suppliers.edit");
+    const services=s.services.filter(item=>item.supplierId===id);
+    return <section className="card settings-form">
+      <h2>{supplier.name}</h2>
+      <Badge status={supplier.active ? "CONFIRMED":"CANCELLED"}>{supplier.active?"نشط":"مؤرشف"}</Badge>
+      <p>{supplier.category} · {supplier.serviceAreas || supplier.area}</p>
+      {supplier.phone && <p>الهاتف <a href={"tel:"+supplier.phone}>{supplier.phone}</a></p>}
+      {supplier.email && <p>البريد <a href={"mailto:"+supplier.email}>{supplier.email}</a></p>}
+      <p>{supplier.terms}</p><p>{supplier.notes}</p>
+      <h3>الخدمات والتوفر</h3>
+      {services.map(item=><div className="list-row" key={item.id}>
+        <Link to={"/admin/catalog/"+item.id}>{item.title}</Link>
+        {hasPermission(s.session,"costs.view") && <Price value={item.cost}/>}
+        <span>السعة {item.capacity}</span>
+      </div>)}
+      {canEdit && !!services.length && <form onSubmit={event=>{
+        event.preventDefault(); const f=new FormData(event.currentTarget);
+        act("AVAILABILITY",{serviceId:f.get("serviceId"),date:f.get("date"),capacity:Number(f.get("capacity")),blocked:f.has("blocked")});
+      }}>
+        <Field label="الخدمة"><select name="serviceId">{services.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}</select></Field>
+        <Field label="التاريخ"><input required type="date" name="date"/></Field>
+        <Field label="السعة"><input required type="number" min={0} max={10000} name="capacity"/></Field>
+        <label className="check-label"><input name="blocked" type="checkbox"/> إغلاق الحجز</label>
+        <Btn type="submit">حفظ التوفر</Btn>
+      </form>}
+      <div className="button-row">
+        {canEdit && <Btn onClick={()=>edit(supplier)}>تعديل</Btn>}
+        {canEdit && <Btn variant="outline" onClick={()=>act("SUPPLIER_SAVE",{id,active:!supplier.active})}>{supplier.active?"أرشفة المورد":"إعادة تنشيط المورد"}</Btn>}
+        {canOpenAdminPage(s.session,"procurement") && <Btn to={"/admin/procurement?supplierId="+encodeURIComponent(id)}>طلبات التوريد</Btn>}
+        {canOpenAdminPage(s.session,"settlements") && <Btn to="/admin/settlements">المستحقات</Btn>}
+      </div>
+    </section>;
+  }
   return (
     <>
       <RecordPager data={records} />
@@ -1711,7 +1839,7 @@ function Suppliers({ s, act, setModal }: any) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        {s.session.role === "admin" && (
+        {hasPermission(s.session,"suppliers.edit") && (
           <Btn onClick={() => edit()}>
             إضافة مورد
             <Plus size={16} />
@@ -1730,7 +1858,7 @@ function Suppliers({ s, act, setModal }: any) {
                   {v.active ? "نشط" : "موقوف"}
                 </Badge>
               </div>
-              <h2>{v.name}</h2>
+              <h2><Link to={"/admin/suppliers/"+v.id}>{v.name}</Link></h2>
               <p>
                 {v.category} · {v.area}
               </p>
@@ -1760,13 +1888,13 @@ function Suppliers({ s, act, setModal }: any) {
                     ).length
                   }
                 </b>
-                <span>التعرض المالي</span>
+                {hasPermission(s.session,"costs.view") && <><span>التعرض المالي</span>
                 <Price
                   value={!isDemo?v.costExposure:s.orders
                     .flatMap((o) => o.lines)
                     .filter((l) => l.supplierId === v.id)
                     .reduce((n, l) => n + (l.cost || 0) * l.qty, 0)}
-                />
+                /></>}
               </div>
               <details>
                 <summary>قائمة الأسعار والخدمات</summary>
@@ -1775,11 +1903,11 @@ function Suppliers({ s, act, setModal }: any) {
                   .map((x) => (
                     <div className="list-row" key={x.id}>
                       <span>{x.title}</span>
-                      <Price value={x.cost} />
+                      {hasPermission(s.session,"costs.view") && <Price value={x.cost} />}
                     </div>
                   ))}
               </details>
-              {s.session.role === "admin" && (
+              {hasPermission(s.session,"suppliers.edit") && (
                 <div className="button-row">
                   <Btn variant="outline" onClick={() => edit(v)}>
                     تعديل
@@ -1823,7 +1951,7 @@ function Customers({ s, act, setModal }: any) {
             return (
               <section className="card" key={person.id}>
                 <div className="section-title">
-                  <h2>{n}</h2>
+                  <h2><Link to={"/admin/customers/"+person.id}>{n}</Link></h2>
                   <span className="avatar">{n[0]}</span>
                 </div>
                 <p>
@@ -2123,6 +2251,15 @@ function Reports({ s }: any) {
     <>
       {!isDemo && !report.value && !report.error && <p role="status">جارٍ حساب التقرير من قاعدة البيانات…</p>}
       {report.error && <p role="alert">{report.error}<button onClick={report.retry}>إعادة المحاولة</button></p>}
+      {report.value && <section className="card settings-form">
+        <h3>النتيجة المالية المحصّلة</h3>
+        <div className="grid three">
+          {[["الإيراد المحصّل","actual"],["تكلفة الخدمات المباشرة","directCosts"],["الربح الإجمالي","grossProfit"],
+            ["المصروفات الإدارية المدفوعة","operatingExpenses"],["الربح الصافي","netProfit"]]
+            .filter(([,key])=>report.value[key]!==undefined)
+            .map(([label,key])=><div className="list-row" key={key}><span>{label}</span><Price value={report.value[key]}/></div>)}
+        </div>
+      </section>}
       <div className="toolbar">
         <select
           aria-label="فترة التقرير"
@@ -2264,18 +2401,7 @@ function Team({ s, act, setModal }: any) {
                 <Field label="الدور">
                   <select name="role">
                     <option value="staff">منسق / موظف</option>
-                    <option value="supplier">مورد</option>
                     <option value="admin">مالك / مدير</option>
-                  </select>
-                </Field>
-                <Field label="المورد المرتبط (لدعوة المورد فقط)">
-                  <select name="supplierId">
-                    <option value="">غير مرتبط</option>
-                    {s.suppliers.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}
-                      </option>
-                    ))}
                   </select>
                 </Field>
                 <Btn type="submit">إنشاء الدعوة</Btn>
@@ -2302,7 +2428,7 @@ function Team({ s, act, setModal }: any) {
             <tbody>
               {records.items.map((u) => (
                 <tr key={u.id}>
-                  <td>{u.name}</td>
+                  <td><Link to={"/admin/users/"+u.id}>{u.name}</Link></td>
                   <td>{u.email}</td>
                   <td>
                     <select
@@ -2414,7 +2540,7 @@ function Audit({ s }: any) {
             <tbody>
               {list.map((a) => (
                 <tr key={a.id}>
-                  <td>{a.action}</td>
+                  <td><Link to={"/admin/audit/"+a.id}>{a.action}</Link></td>
                   <td>{a.actor}</td>
                   <td>{a.entity}</td>
                   <td>{a.reason}</td>
@@ -2494,10 +2620,18 @@ function SettingsPage({ s, act }: any) {
             ),
           ];
         }
+        f.workflow = {
+          supplierReview: Boolean(f.supplierReview),
+          staffReview: Boolean(f.staffReview),
+          approval: f.approval,
+        };
+        delete f.supplierReview;
+        delete f.staffReview;
+        delete f.approval;
         delete f.couponCode;
         delete f.couponPercent;
         delete f.couponExpires;
-        f.doubleApproval = f.doubleApproval === "on";
+        f.doubleApproval = f.workflow.staffReview;
         f.earlyPayment = f.earlyPayment === "on";
         if (await act("SETTINGS", f)) setDirty(false);
       }}
@@ -2603,14 +2737,19 @@ function SettingsPage({ s, act }: any) {
           <option value="ar">العربية</option>
         </select>
       </Field>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          name="doubleApproval"
-          defaultChecked={s.settings.doubleApproval}
-        />
-        تفعيل الموافقة المزدوجة واستقلال المراجع
-      </label>
+      <fieldset>
+        <legend>دورة اعتماد الطلبات</legend>
+        <label className="check-label"><input type="checkbox" name="staffReview"
+          defaultChecked={s.settings.workflow?.staffReview ?? s.settings.doubleApproval} /> اشتراط مراجعة الموظف</label>
+        <label className="check-label"><input type="checkbox" name="supplierReview"
+          defaultChecked={s.settings.workflow?.supplierReview ?? true} /> اشتراط تحقق الفريق من التوفر قبل إرسال العرض</label>
+        <Field label="صلاحية اعتماد العرض">
+          <select name="approval" defaultValue={s.settings.workflow?.approval ?? "owner"}>
+            <option value="owner">المالك</option>
+            <option value="delegated">المالك أو الموظف المخوّل</option>
+          </select>
+        </Field>
+      </fieldset>
       <label className="check-label">
         <input
           type="checkbox"
@@ -2992,6 +3131,7 @@ export function Supplier({ s, act, ask, path }: any) {
   );
 }
 export function Utility({ s, act, path, setToast, signOut, signingOut }: any) {
+  const contentText = useContent();
   const brand = branding(s.settings).name || "المنصة";
   const [sent, setSent] = useState(false);
   let title = (
@@ -3017,7 +3157,7 @@ export function Utility({ s, act, path, setToast, signOut, signingOut }: any) {
   return (
     <>
       <Hero
-        title={title}
+        title={contentText("pages."+path.slice(1)+".title",title) || title}
         sub={
           path === "/about"
             ? "لأن المناسبات الحلوة ما تنترك للصدفة.. تبيلها سنع وذرابة"

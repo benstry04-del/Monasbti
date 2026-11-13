@@ -1,5 +1,9 @@
 import {totals} from './money.mjs';
 export const KEY = "monasabati.v1.3";
+export function packageIdOf(line) {
+  return line.packageId || (line.id.split(":").length >= 3 ? line.id.split(":")[0] : null);
+}
+
 export const occasions = [
   "حفل زفاف",
   "خطوبة",
@@ -27,7 +31,7 @@ export const labels = {
   DRAFT: "مسودة",
   REQUESTED: "طلب جديد",
   INTERNAL_REVIEW: "قيد المراجعة",
-  SUPPLIER_CONFIRMATION: "بانتظار الموردين",
+  SUPPLIER_CONFIRMATION: "الفريق يتحقق من التوفر",
   QUOTE_READY: "العرض جاهز",
   CUSTOMER_REVIEW: "بانتظار موافقتك",
   CONTRACT_PENDING: "اعتماد العقد",
@@ -555,7 +559,11 @@ export function dispatch(state, action, p = {}) {
       const pack = s.packages.find((x) => x.id === p.id);
       if (!pack?.serviceIds?.length)
         throw Error("هذه الباقة لا تحتوي خدمات محددة بعد");
-      const selected = pack.serviceIds.map((id) =>
+      if (p.qty !== undefined && p.qty !== 1)
+        throw Error("يمكن اختيار الباقة مرة واحدة لكل طلب");
+      if (s.cart.some(line => packageIdOf(line) === pack.id))
+        throw Error("هذه الباقة موجودة في السلة");
+      const selected = [...new Set(pack.serviceIds)].map((id) =>
         s.services.find((x) => x.id === id),
       );
       if (selected.some((x) => !x))
@@ -567,29 +575,46 @@ export function dispatch(state, action, p = {}) {
         const price =
           i === selected.length - 1
             ? Math.round((target - allocated) * 1000) / 1000
-            : Math.round((x.price / base) * target * 1000) / 1000;
+            : Math.round((base ? x.price / base : 1 / selected.length) * target * 1000) / 1000;
         allocated += price;
         s.cart.push({
           ...x,
           id: pack.id + ":" + crypto.randomUUID() + ":" + x.id,
           title: x.title + " — " + pack.title,
+          packageId: pack.id,
+          packageGuests: p.guests || pack.capacity,
           price,
-          qty: p.qty || 1,
+          qty: 1,
           option: p.option || "الأساسية",
           response: "WAITING",
         });
       });
       break;
     }
-    case "CART_REMOVE":
-      s.lastRemoved = s.cart.find((x) => x.id === p.id);
-      s.cart = s.cart.filter((x) => x.id !== p.id);
+    case "CART_REMOVE": {
+      const line = s.cart.find(x => x.id === p.id);
+      const packageId = line && packageIdOf(line);
+      const removed = s.cart.filter(x => x.id === p.id || (packageId && packageIdOf(x) === packageId));
+      s.lastRemoved = removed.length ? removed : null;
+      s.cart = s.cart.filter(x => !removed.includes(x));
       break;
-    case "CART_UNDO":
-      if (s.lastRemoved) s.cart.push(s.lastRemoved);
+    }
+    case "CART_UNDO": {
+      const removed = Array.isArray(s.lastRemoved) ? s.lastRemoved : [s.lastRemoved].filter(Boolean);
+      const packageId = removed[0] && packageIdOf(removed[0]);
+      if (packageId && s.cart.some(x => packageIdOf(x) === packageId))
+        throw Error("هذه الباقة موجودة في السلة");
+      for (const line of removed) {
+        const existing = s.cart.find(x => x.id === line.id);
+        if (existing) existing.qty = Math.min(10000, existing.qty + line.qty);
+        else s.cart.push(line);
+      }
       s.lastRemoved = null;
       break;
+    }
     case "CART_QTY":
+      if (s.cart.some(x => x.id === p.id && packageIdOf(x)))
+        throw Error("يمكن تخصيص الباقة من صفحة تفاصيلها");
       s.cart = s.cart.map((x) =>
         x.id === p.id ? { ...x, qty: Math.max(1, p.qty) } : x,
       );
@@ -649,6 +674,7 @@ export function dispatch(state, action, p = {}) {
         transition("SUPPLIER_CONFIRMATION");
       }
       let line = o.lines.find((l) => l.id === p.lineId);
+      if (!line) throw Error("بند الخدمة غير موجود");
       if (role === "supplier" && line.supplierId !== s.session.supplierId)
         throw Error("هذا الطلب مخصص لمورد آخر");
       if (!p.reason && p.response === "REJECTED")
@@ -665,8 +691,9 @@ export function dispatch(state, action, p = {}) {
         line.cost = Number(p.cost);
       }
       if (p.leadTime) line.leadTime = p.leadTime;
-      line.alternative = p.reason || "";
-      log("رد المورد", o.id, before, line.response);
+      line.alternative = p.response === "REJECTED" ? p.reason : "";
+      line.verification = {actorId:s.session.id,channel:p.channel || "phone",reason:p.reason || "",at};
+      log("تسجيل نتيجة التواصل مع المورد", o.id, before, line.response);
       if (
         o.lines.every(
           (l) => l.response === "CONFIRMED_SUPPLIER" && l.cost !== null,
@@ -747,19 +774,24 @@ export function dispatch(state, action, p = {}) {
       unlocked();
       {
         const x = pricing(o.lines, o.discount);
+        const workflow = s.settings.workflow;
         if (
-          !o.lines.every((l) => l.response === "CONFIRMED_SUPPLIER") ||
-          x.cost === null
+          (workflow?.supplierReview ?? true) &&
+          (!o.lines.every(l => l.response === "CONFIRMED_SUPPLIER") || x.cost === null)
         )
           throw Error("يجب تأكيد جميع الموردين والتكاليف أولًا");
-        if (x.margin < s.settings.threshold && !o.ownerApproved)
+        if (x.margin !== null && x.margin < s.settings.threshold && !o.ownerApproved)
           throw Error("الهامش أقل من الحد، يلزم اعتماد المالك");
         if (
-          s.settings.doubleApproval &&
+          (workflow?.staffReview ?? s.settings.doubleApproval) &&
           !o.approvals.some((a) => a.role === "staff")
         )
           throw Error("تحتاج مراجعة موظف مستقل أولًا");
-        if (!o.ownerApproved) throw Error("يلزم اعتماد المالك");
+        const delegated = workflow?.approval === "delegated" &&
+          o.approvals.some(a => a.role === "staff");
+        if (!o.ownerApproved && !delegated) throw Error("يلزم اعتماد المالك أو الموظف المخوّل");
+        if (bookingMachine[o.status]?.includes("QUOTE_READY") && !bookingMachine[o.status]?.includes("CUSTOMER_REVIEW"))
+          transition("QUOTE_READY");
         o.validUntil = new Date(Date.now() + 7 * 86400000).toISOString();
         o.quoteSnapshot = structuredClone(o.lines);
         transition("CUSTOMER_REVIEW");
@@ -821,7 +853,7 @@ export function dispatch(state, action, p = {}) {
       log("إنشاء عرض ملحق", o.id, null, o.amendment);
       break;
     case "AMENDMENT_CONFIRM":
-      requireRole("supplier", "admin");
+      requireRole("supplier", "admin", "staff");
       if (
         role === "supplier" &&
         o.amendment.lines[0].supplierId !== s.session.supplierId
@@ -1086,7 +1118,7 @@ export function dispatch(state, action, p = {}) {
     }
     case "CATALOG_SAVE":
     case "PACKAGE_SAVE":
-      requireRole("admin");
+      requireRole("admin", "staff");
       {
         const list = action === "CATALOG_SAVE" ? s.services : s.packages;
         let old = list.find((x) => x.id === p.id);
@@ -1109,7 +1141,7 @@ export function dispatch(state, action, p = {}) {
       }
     case "CATALOG_DELETE":
     case "PACKAGE_DELETE":
-      requireRole("admin");
+      requireRole("admin", "staff");
       {
         const key = action === "CATALOG_DELETE" ? "services" : "packages";
         s[key] = s[key].filter((x) => x.id !== p.id);
@@ -1117,7 +1149,7 @@ export function dispatch(state, action, p = {}) {
         break;
       }
     case "SUPPLIER_SAVE":
-      requireRole("admin");
+      requireRole("admin", "staff");
       {
         let v = s.suppliers.find((x) => x.id === p.id);
         if (v) Object.assign(v, p);
@@ -1133,7 +1165,7 @@ export function dispatch(state, action, p = {}) {
         break;
       }
     case "USER_SAVE":
-      requireRole("admin");
+      requireRole("admin", "staff");
       {
         let u = s.users.find((x) => x.id === p.id);
         if (u) Object.assign(u, p);

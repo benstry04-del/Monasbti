@@ -330,6 +330,20 @@ export async function executeJob(
 
 export async function scheduleDueReminders() {
   return transaction(async (client) => {
+    await client.query(`INSERT INTO admin_expenses
+      (booking_id,supplier_id,expense_date,amount_minor,paid_minor,data,recurring_from)
+      SELECT e.booking_id,e.supplier_id,due.day,e.amount_minor,0,
+        e.data || jsonb_build_object('date',due.day,'paid',0,'recurring','none','fileId',NULL,'invoice',''),e.id
+      FROM admin_expenses e CROSS JOIN LATERAL (
+        SELECT CASE e.data->>'recurring'
+          WHEN 'monthly' THEN (date_trunc('month',now() AT TIME ZONE 'Asia/Kuwait') +
+            (LEAST(EXTRACT(day FROM e.expense_date),EXTRACT(day FROM date_trunc('month',now() AT TIME ZONE 'Asia/Kuwait')+interval '1 month - 1 day'))-1)*interval '1 day')::date
+          WHEN 'yearly' THEN (e.expense_date + (EXTRACT(year FROM now() AT TIME ZONE 'Asia/Kuwait')-EXTRACT(year FROM e.expense_date))*interval '1 year')::date
+        END AS day
+      ) due
+      WHERE NOT e.archived AND e.recurring_from IS NULL
+        AND due.day>e.expense_date AND due.day<=(now() AT TIME ZONE 'Asia/Kuwait')::date
+      ON CONFLICT DO NOTHING`);
     await client.query(
       "INSERT INTO scheduled_reminders(booking_id,user_id,due_at,kind) SELECT id,customer_id,occasion_date::timestamptz-interval '1 day','EVENT_TOMORROW' FROM bookings WHERE status IN ('CONFIRMED','PREPARATION') AND occasion_date>=current_date ON CONFLICT DO NOTHING",
     );

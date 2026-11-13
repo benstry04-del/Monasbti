@@ -118,6 +118,9 @@ async function refresh(force = false) {
   return pending;
 }
 const realApi: any = {
+  contractVersions(id:string){return request("/contracts/"+encodeURIComponent(id)+"/versions");},
+  backoffice(path:string,body?:any){return request("/backoffice"+path,body);},
+  inviteCustomer(profile:any){return request("/auth/invite",{...profile,role:"customer"});},
   reportSummary(params:any){return request('/report-summary?'+new URLSearchParams(params));},
   calendar(month:string){return request('/calendar?month='+month);},
   records(kind:string,params:any={}){return request('/records/'+kind+'?'+new URLSearchParams(Object.entries(params).filter(([,v])=>v!==undefined && v!==null).map(([k,v])=>[k,String(v)])));},
@@ -136,7 +139,7 @@ const realApi: any = {
   },
   async send(action: string, payload: any = {}) {
     if(action==='SIGN' && (state.settings.signatureMode==='bridge' || state.orders.find((o:any)=>o.id===payload.id)?.externalSignature)){
-      const created=await request('/signatures',{bookingId:payload.id,consent:payload.consent,signature:payload.signature});
+      const created=await request('/signatures',{bookingId:payload.id,consent:payload.consent,signature:payload.signature,contractVersion:payload.contractVersion});
       for(let i=0;i<15;i++){
         const current=await request('/signatures/'+created.id);
         if(current.status==='COMPLETED')return refresh(true);
@@ -249,11 +252,11 @@ const realApi: any = {
   async resetPassword(token: string, password: string) {
     return request("/auth/reset-password", { token, password });
   },
-  async upload(file: File, bookingId: string) {
+  async upload(file: File, bookingId?: string) {
     const form = new FormData();
     form.append("file", file);
     const result = await request(
-      "/files?bookingId=" + encodeURIComponent(bookingId),
+      bookingId ? "/files?bookingId=" + encodeURIComponent(bookingId) : "/files",
       form,
     );
     await refresh(true);

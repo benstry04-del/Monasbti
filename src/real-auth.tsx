@@ -1,3 +1,4 @@
+import { useContent } from "./content";
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Eye, EyeOff, Flower2, Mail, ShieldCheck } from "lucide-react";
 import { branding } from "./branding.mjs";
@@ -30,6 +31,7 @@ function rememberEmail(email: string) {
 
 export function RealAuth({ path }: { path: string }) {
   const settings = useStore().settings;
+  const contentText = useContent();
   const identity = branding(settings);
   const kind = path.split("/")[2] as keyof typeof copy;
   const register = kind === "register", verify = kind === "verify";
@@ -115,7 +117,7 @@ export function RealAuth({ path }: { path: string }) {
         </nav>}
         <div className="auth-journey-heading">
           <span className="eyebrow">حياكم الله{identity.name && " في " + identity.name}</span>
-          <h1 id="auth-journey-title">{title}</h1>
+          <h1 id="auth-journey-title">{contentText("auth."+kind+".title",title)}</h1>
           <p>{intro}</p>
         </div>
         <form onSubmit={submit} aria-busy={busy}>

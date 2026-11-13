@@ -1,8 +1,9 @@
+import { hasPermission, actionPermission } from "../src/staff-permissions.mjs";
 import { contractHTML, documentHash, brandSnapshot } from "./providers/documents.mjs";
 import { totals, couponDiscount } from "../src/money.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { dispatch, pricing, categories } from "../src/domain.mjs";
+import { dispatch, pricing, categories, packageIdOf } from "../src/domain.mjs";
 import {integrationEnvironment} from './integration-runtime.mjs';
 
 export const digest = (value) =>
@@ -62,6 +63,7 @@ export const permissions = {
   CART_QTY: ["guest", "customer"],
   COUPON: ["customer"],
   SUBMIT: ["customer"],
+  ASSISTED_SUBMIT: ["staff", "admin"],
   SELECT_ORDER: ["customer", "supplier", "staff", "admin"],
   AMENDMENT_APPROVE: ["staff", "admin"],
   PROFILE: ["customer", "supplier", "staff", "admin"],
@@ -76,7 +78,7 @@ export const permissions = {
   QUOTE_ACCEPT: ["customer"],
   CHANGES: ["customer"],
   AMENDMENT_CREATE: ["staff", "admin"],
-  AMENDMENT_CONFIRM: ["supplier", "admin"],
+  AMENDMENT_CONFIRM: ["staff", "admin"],
   AMENDMENT_ACCEPT: ["customer"],
   SIGN: ["customer"],
   CANCEL: ["customer"],
@@ -86,17 +88,20 @@ export const permissions = {
   NOTE: ["staff", "admin"],
   CATEGORY_SAVE: ["admin"],
   CATEGORY_DELETE: ["admin"],
-  CATALOG_SAVE: ["admin"],
-  CATALOG_DELETE: ["admin"],
-  PACKAGE_SAVE: ["admin"],
-  PACKAGE_DELETE: ["admin"],
-  SUPPLIER_SAVE: ["admin"],
+  CATALOG_SAVE: ["admin", "staff"],
+  CATALOG_DELETE: ["admin", "staff"],
+  PACKAGE_SAVE: ["admin", "staff"],
+  PACKAGE_DELETE: ["admin", "staff"],
+  SUPPLIER_SAVE: ["admin", "staff"],
   USER_SAVE: ["admin"],
   SETTINGS: ["admin"],
   TICKET_REPLY: ["staff", "admin"],
   FEEDBACK: ["customer"],
   RENEW: ["customer", "staff", "admin"],
-  AVAILABILITY: ["supplier", "admin"],
+  AVAILABILITY: ["staff", "admin"],
+  ORDER_REVIEW_DECISION: ["admin", "staff"],
+  ORDER_DETAILS: ["admin", "staff"],
+  CONTRACT_REVISE: ["admin", "staff"],
 };
 const workspaceActions = new Set([
   "PLANNER",
@@ -110,6 +115,9 @@ const workspaceActions = new Set([
   "SELECT_ORDER",
 ]);
 const orderActions = new Set([
+  "ORDER_REVIEW_DECISION",
+  "ORDER_DETAILS",
+  "CONTRACT_REVISE",
   "REVIEW",
   "SUPPLIER_RESPONSE",
   "ALTERNATIVE",
@@ -132,8 +140,12 @@ const orderActions = new Set([
   "RENEW",
 ]);
 export function assertPermission(actor, action, order) {
-  if (!permissions[action]?.includes(actor?.role || "guest"))
+  if (actor?.role === "supplier" || !permissions[action]?.includes(actor?.role || "guest"))
     fail("ليس لديك صلاحية لهذا الإجراء", 403);
+  if (actor?.role === "staff" && actor.staffRoleId &&
+      action !== "PROFILE" && action !== "READ" &&
+      (!actionPermission[action] || !hasPermission(actor, actionPermission[action])))
+    fail("الدور لا يملك صلاحية هذا الإجراء", 403);
   if (order && actor?.role === "customer" && order.customerId !== actor.id)
     fail("الطلب غير مخوّل", 403);
   if (
@@ -213,6 +225,11 @@ export async function readState(
     settings[0]?.data?.settings || settings[0]?.data || {},
   );
   s.categories = settings[0]?.data?.categories || s.categories;
+  if (!internal) {
+    s.content = Object.fromEntries((await rows(c,
+      "SELECT p.content_key,r.value FROM content_publications p JOIN content_revisions r ON r.id=p.revision_id",
+    )).map(row => [row.content_key,row.value]));
+  }
   s.services = projection.light && !projection.catalog ? [] : (
     await rows(
       c,
@@ -230,6 +247,13 @@ export async function readState(
   s.suppliers = projection.light && !projection.catalog ? [] : (
     await rows(c, "SELECT id,name,data,active FROM suppliers ORDER BY id")
   ).map((r) => ({ ...r.data, id: r.id, name: r.name, active: r.active }));
+  if (!internal && !["admin","staff"].includes(actor?.role)) {
+    const archived = new Set(s.suppliers.filter(supplier=>!supplier.active).map(supplier=>supplier.id));
+    s.services = s.services.filter(service=>!archived.has(service.supplierId));
+    const activeServices = new Set(s.services.map(service=>service.id));
+    if (!projection.light || projection.catalog)
+      s.packages = s.packages.filter(pack=>pack.serviceIds?.every(id=>activeServices.has(id)));
+  }
   const wid = actor?.id || visitorId;
   const ws =
     (await rows(c, "SELECT data FROM workspaces WHERE id=$1", [wid]))[0]
@@ -390,12 +414,19 @@ export async function readState(
       copy.notes = [];
       delete copy.ownerApproved;
       copy.approvals = [];
+      copy.timeline = (copy.timeline || []).map(({reason,...entry}) => entry);
+      delete copy.createdBy;
+      delete copy.source;
+      const publicLine = line => {
+        const { verification, ...visible } = redact(line);
+        return visible;
+      };
       copy.lines = copy.lines
         .filter(
           (l) => actor.role !== "supplier" || l.supplierId === actor.supplierId,
         )
         .map((l) =>
-          actor.role === "supplier" ? { ...l, price: l.cost || 0 } : redact(l),
+          actor.role === "supplier" ? { ...l, price: l.cost || 0 } : publicLine(l),
         );
       if (actor.role === "supplier") {
         copy.contract = null;
@@ -405,9 +436,9 @@ export async function readState(
         copy.paid = 0;
       } else {
         if (copy.contract)
-          copy.contract.snapshot = copy.contract.snapshot.map(redact);
+          copy.contract.snapshot = copy.contract.snapshot.map(publicLine);
         if (copy.quoteSnapshot)
-          copy.quoteSnapshot = copy.quoteSnapshot.map(redact);
+          copy.quoteSnapshot = copy.quoteSnapshot.map(publicLine);
       }
       for (const a of [copy.amendment,...(copy.amendmentHistory || [])].filter(Boolean)) {
         a.lines = a.lines
@@ -473,6 +504,33 @@ export async function readState(
       );
     });
   }
+  if (actor?.staffRoleId) {
+    const can = permission => hasPermission(actor, permission);
+    if (!can("orders.view")) s.orders = can("contracts.view") ? s.orders.filter(order=>order.contract) : [];
+    if (!can("contracts.view")) s.orders = s.orders.map(({contract,externalSignature,...order}) => ({
+      ...order, contract:contract ? {status:contract.status} : null,
+    }));
+    if (!can("payments.view")) s.payments = [];
+    else s.payments = s.payments.map(({profit,margin,cost,discount,...payment}) => payment);
+    if (!can("audit.view") || !can("costs.view") || !can("profit.view") || !can("discounts.view")) s.audit = [];
+    s.users = [];
+    s.tickets = [];
+    const sanitize = value => {
+      if (Array.isArray(value)) return value.map(sanitize);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value).filter(([key]) =>
+        (can("costs.view") || !/cost|markup|payoutRecipient|supplierInvoice/i.test(key)) &&
+        (can("profit.view") || !/profit|margin/i.test(key)) &&
+        (can("discounts.view") || !/discount|coupon/i.test(key)),
+      ).map(([key,item]) => [key,sanitize(item)]));
+    };
+    s.orders = sanitize(s.orders);
+    s.services = sanitize(s.services);
+    s.suppliers = (can("suppliers.view") || can("procurement.edit") || can("expenses.edit")) ? sanitize(s.suppliers) : [];
+    s.settings = sanitize(s.settings);
+    delete s.settings.integrationSecrets;
+    s.packages = sanitize(s.packages);
+  }
   if(['admin','staff'].includes(actor?.role))s.counters={ownerApprovals:Number((await c.query("SELECT count(*) FROM bookings WHERE status='NEEDS_OWNER_APPROVAL'")).rows[0].count)};
   s.runtime = { mode: "real", ready: true };
   return s;
@@ -492,11 +550,11 @@ export async function reserveCapacity(
     a.localeCompare(b),
   )) {
     const service = (
-      await rows(c, "SELECT * FROM catalog_services WHERE id=$1 FOR UPDATE", [
+      await rows(c, "SELECT c.*, COALESCE(s.active,true) AS supplier_active FROM catalog_services c LEFT JOIN suppliers s ON s.id=c.supplier_id WHERE c.id=$1 FOR UPDATE OF c", [
         id,
       ])
     )[0];
-    if (!service?.active) fail("الخدمة غير متاحة", 409);
+    if (!service?.active || !service.supplier_active) fail("الخدمة غير متاحة", 409);
     const override = (
       await rows(
         c,
@@ -518,7 +576,7 @@ export async function reserveCapacity(
       fail("التاريخ أو الكمية لم تعد متاحة؛ اختاري موعدًا أو خدمة أخرى", 409);
     if (!checkOnly)
       await c.query(
-        "INSERT INTO reservations(booking_id,service_id,event_date,qty,status,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '7 days') ON CONFLICT(booking_id,service_id) DO UPDATE SET qty=EXCLUDED.qty,status=EXCLUDED.status,expires_at=EXCLUDED.expires_at",
+        "INSERT INTO reservations(booking_id,service_id,event_date,qty,status,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '7 days') ON CONFLICT(booking_id,service_id) DO UPDATE SET event_date=EXCLUDED.event_date,qty=EXCLUDED.qty,status=EXCLUDED.status,expires_at=EXCLUDED.expires_at",
         [o.id, id, o.occasion.date, qty, status],
       );
   }
@@ -533,6 +591,8 @@ export async function executeCommand(
   readProjection = {},
 ) {
   const p = validatePayload(action, structuredClone(input));
+  const assisted = action === "ASSISTED_SUBMIT";
+  const submission = action === "SUBMIT" || assisted;
   for (const key of [
     "price",
     "discount",
@@ -659,6 +719,23 @@ export async function executeCommand(
     )
       .max(100)
       .parse(p.coupons);
+  if (action === "SUPPLIER_SAVE") {
+    for (const key of Object.keys(p))
+      if (!["id","name","active","area","serviceAreas","terms","notes","phone","email","category","payoutRecipientId"].includes(key)) delete p[key];
+    if (p.payoutRecipientId !== undefined && actor.role !== "admin") fail("مرجع التحويل من صلاحية المالك",403);
+    if (!p.id || p.name !== undefined) p.name = z.string().trim().min(2).max(160).parse(p.name);
+    if (p.active !== undefined) z.boolean().parse(p.active);
+    for (const field of ["area","serviceAreas","terms","notes","phone","category","payoutRecipientId"])
+      if (p[field] !== undefined) p[field] = z.string().trim().max(3000).parse(p[field]);
+    if (p.email) p.email = z.email().parse(p.email);
+    if (p.id && !s.suppliers.some(supplier=>supplier.id===p.id)) fail("المورد غير موجود",404);
+  }
+  if (action === "SETTINGS" && p.workflow !== undefined)
+    p.workflow = z.object({
+      supplierReview: z.boolean(),
+      staffReview: z.boolean(),
+      approval: z.enum(["owner", "delegated"]),
+    }).strict().parse(p.workflow);
   if (action === "SETTINGS" && p.taxRate !== undefined)
     z.number().min(0).max(100).parse(p.taxRate);
   if (action === "PROFILE") {
@@ -690,6 +767,14 @@ export async function executeCommand(
     )
   )
     fail("تغير التسعير أو الضريبة؛ أعد الموافقات", 409);
+  if (action === "SUPPLIER_RESPONSE" && p.reason !== undefined)
+    p.reason = z.string().trim().max(1000).parse(p.reason);
+  if (action === "SUPPLIER_RESPONSE" && p.channel !== undefined)
+    z.enum(["phone","whatsapp","email","other"]).parse(p.channel);
+  if (action === "SUPPLIER_RESPONSE" && p.cost !== undefined &&
+      !hasPermission(actor, "costs.view")) fail("التكلفة تتطلب صلاحية مالية", 403);
+  if (action === "PRICE" && p.discount !== undefined && p.discount !== o.discount &&
+      !hasPermission(actor, "discounts.view")) fail("الخصم يتطلب صلاحية مالية", 403);
   if (action === "PRICE" && p.lines) {
     if (
       p.lines.length !== o.lines.length ||
@@ -699,12 +784,22 @@ export async function executeCommand(
       )
     )
       fail("بنود العرض لا تطابق الطلب");
+    if (new Set(p.lines.map(line=>line.id)).size !== p.lines.length)
+      fail("لا يمكن تكرار بند في الطلب",409);
+    if (p.lines.some(line => {
+      const existing = o.lines.find(item => item.id === line.id);
+      return existing && packageIdOf(existing) && line.qty !== existing.qty;
+    })) fail("تعديل عدد الباقات غير مسموح", 409);
+    const existingById = new Map(o.lines.map(line=>[line.id,line]));
+    const capacityChanged = p.lines.some(line=>existingById.get(line.id)?.qty !== line.qty);
     p.lines = p.lines.map((l) => ({
-      ...o.lines.find((x) => x.id === l.id),
+      ...existingById.get(l.id),
+      ...(existingById.get(l.id).qty !== l.qty ? {response:"WAITING",verification:null} : {}),
       qty: l.qty,
       price: l.price,
-      cost: l.cost,
+      cost: hasPermission(actor, "costs.view") ? l.cost : o.lines.find(x => x.id === l.id).cost,
     }));
+    if (capacityChanged) await reserveCapacity(c,{...o,lines:p.lines});
   }
   if (action === "ALTERNATIVE") {
     if (o.contract?.status === "SIGNED") fail("يلزم ملحق للعقد الموقع", 409);
@@ -730,7 +825,39 @@ export async function executeCommand(
     o.quoteSnapshot = null;
     o.ownerApproved = false;
   }
-  if (action === "SUBMIT") {
+  if (assisted) {
+    const details = z.object({
+      customerId: z.string().min(1).max(150),
+      occasion: z.object({
+        type: z.string().trim().min(1).max(100), date: z.iso.date(),
+        location: z.string().trim().min(1).max(200), guests: z.number().int().min(1).max(100000),
+        notes: z.string().max(3000).default(""),
+      }).strict(),
+      items: z.array(z.object({
+        id:z.string().min(1).max(150), kind:z.enum(["service","package"]),
+        qty:z.number().int().min(1).max(10000).optional(), option:z.string().max(120).optional(),
+      }).strict()).min(1).max(100),
+      discount:z.number().min(0).optional(),
+    }).strict().parse(p);
+    const customer = (await rows(c, "SELECT id,name,email,role FROM users WHERE id=$1 AND role='customer' AND (active OR password_hash='!INVITED') FOR SHARE", [details.customerId]))[0];
+    if (!customer) fail("حساب العميل غير متاح", 404);
+    if (details.discount && !hasPermission(actor, "discounts.view"))
+      fail("الخصم يتطلب صلاحية مالية", 403);
+    s.session = customer;
+    s.users.push(customer);
+    s.planner = { ...s.planner, ...details.occasion };
+    s.cart = [];
+    s.coupon = 0;
+    try {
+      for (const item of details.items)
+        s.cart = dispatch(s, item.kind === "package" ? "CART_PACKAGE" : "CART_ADD", {
+          id:item.id, qty:item.qty, option:item.option, guests:details.occasion.guests,
+        }).cart;
+    } catch (error) {
+      fail(error.message, 409);
+    }
+  }
+  if (submission) {
     if (s.coupon?.code) {
       const latest = s.settings.coupons?.find(
         (x) =>
@@ -748,21 +875,107 @@ export async function executeCommand(
       )
     )
       fail("اختاري تاريخًا مستقبليًا");
-    s.cart = s.cart.map((l) => {
-      const service = s.services.find(
-        (x) => x.id === (l.id.includes(":") ? l.id.split(":").at(-1) : l.id),
-      );
+    const rebuilt = new Set();
+    const cart = [];
+    for (const line of s.cart) {
+      const packageId = packageIdOf(line);
+      if (packageId) {
+        if (rebuilt.has(packageId)) continue;
+        rebuilt.add(packageId);
+        const planner = { ...s, cart: [] };
+        try {
+          cart.push(...dispatch(planner, "CART_PACKAGE", {
+            id: packageId, guests: line.packageGuests || s.planner.guests, option: line.option,
+          }).cart);
+        } catch (error) {
+          fail(error.message, 409);
+        }
+        continue;
+      }
+      const service = s.services.find(x => x.id === line.id);
       if (!service) fail("الخدمة غير موجودة");
-      return {
-        ...service,
-        id: l.id,
-        price: l.id.includes(":") ? l.price : service.price,
-        qty: l.qty,
-        option: l.option,
-        response: "WAITING",
-      };
-    });
+      cart.push({ ...service, qty: line.qty, option: line.option, response: "WAITING" });
+    }
+    s.cart = cart;
   }
+  const verifyPublished = action === "SUPPLIER_RESPONSE" &&
+    ["CUSTOMER_REVIEW","CONTRACT_APPROVED"].includes(o.status) &&
+    p.response === "CONFIRMED_SUPPLIER";
+  if (verifyPublished) {
+    const line = o.lines.find(item => item.id === p.lineId);
+    if (!line) fail("بند الخدمة غير موجود",404);
+    if (p.cost !== undefined && p.cost !== line.cost)
+      fail("تغيير التكلفة بعد النشر يتطلب إعادة التسعير",409);
+    line.response = "CONFIRMED_SUPPLIER";
+    line.verification = {
+      actorId:actor.id, channel:p.channel || "phone",
+      reason:z.string().trim().min(3).max(1000).parse(p.reason),
+      at:new Date().toISOString(),
+    };
+  }
+  if (action === "ORDER_DETAILS") {
+    const details = z.object({
+      id:z.string(), expectedVersion:z.number().int(), date:z.iso.date(),
+      location:z.string().trim().min(2).max(200), guests:z.number().int().min(1).max(100000),
+      type:z.string().trim().min(2).max(100), notes:z.string().max(3000),
+    }).strict().parse(p);
+    if (o.contract || o.paid > 0 || !["REQUESTED","INTERNAL_REVIEW","SUPPLIER_CONFIRMATION","QUOTE_READY",
+      "NEEDS_OWNER_APPROVAL","NEEDS_CHANGES","SUPPLIER_UNAVAILABLE","CUSTOMER_REVIEW"].includes(o.status))
+      fail("لا يمكن تغيير المناسبة بعد إصدار العقد",409);
+    if (details.date < new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kuwait"}).format(new Date()))
+      fail("اختر تاريخًا مستقبليًا",409);
+    const dateChanged = o.occasion.date !== details.date;
+    o.occasion = {...o.occasion, type:details.type, date:details.date,
+      location:details.location, guests:details.guests, notes:details.notes};
+    if (dateChanged) o.lines.forEach(line => {line.response = "WAITING";});
+    o.approvals = [];
+    o.ownerApproved = false;
+    o.quoteSnapshot = null;
+    o.validUntil = null;
+    o.status = "INTERNAL_REVIEW";
+    o.timeline.push({status:o.status,at:new Date().toISOString()});
+    await c.query("DELETE FROM scheduled_reminders WHERE booking_id=$1 AND kind='EVENT_REMINDER'",[o.id]);
+  }
+  if (action === "CONTRACT_REVISE") {
+    const terms = z.string().trim().min(3).max(10000).parse(p.terms);
+    if (!o.contract || o.contract.status !== "APPROVED" || o.paid > 0)
+      fail("تعديل العقد الموقّع يتطلب ملحقًا مستقلاً",409);
+    if ((await rows(c,"SELECT 1 FROM signature_requests WHERE booking_id=$1 AND status IN ('CREATED','READY','COMPLETED','MANUAL_REVIEW')",[o.id])).length)
+      fail("أغلق طلب التوقيع الخارجي قبل إنشاء نسخة جديدة",409);
+    const version = Number((await rows(c,"SELECT COALESCE(max(version),0)+1 AS version FROM contracts WHERE booking_id=$1",[o.id]))[0].version);
+    o.contract = {...o.contract,version,terms,html:undefined,documentHash:undefined};
+    o.timeline.push({status:"CONTRACT_APPROVED",at:new Date().toISOString(),reason:"صدرت نسخة جديدة من شروط العقد"});
+    s.notifications.unshift({id:randomUUID(),userId:o.customerId,title:"تم تحديث نسخة عقد مناسبتكم، راجعوها قبل التوقيع",
+      to:"/contract/"+o.id,read:false,at:new Date().toISOString()});
+  }
+  if (action === "ORDER_REVIEW_DECISION") {
+    const decision = z.enum(["review", "reject", "cancel"]).parse(p.decision);
+    const reason = z.string().trim().min(3).max(1000).parse(p.reason);
+    if (o.contract?.status === "SIGNED" || o.paid > 0 ||
+      !["REQUESTED", "INTERNAL_REVIEW", "SUPPLIER_CONFIRMATION", "SUPPLIER_UNAVAILABLE",
+        "QUOTE_READY", "NEEDS_OWNER_APPROVAL", "NEEDS_CHANGES", "CUSTOMER_REVIEW"].includes(o.status))
+      fail("حالة الطلب تتطلب إجراء العقد أو الإلغاء المالي", 409);
+    if (decision !== "review" && actor.role !== "admin") fail("الإلغاء والرفض يتطلبان صلاحية المالك", 403);
+    o.status = decision === "review" ? "INTERNAL_REVIEW" : "CANCELLED";
+    o.timeline.push({ status: o.status, reason, at: new Date().toISOString() });
+    o.notes.push({ text: reason, actor: actor.name, at: new Date().toISOString() });
+    o.approvals = [];
+    o.ownerApproved = false;
+    o.quoteSnapshot = null;
+    o.validUntil = null;
+    s.notifications.unshift({id:randomUUID(),userId:o.customerId,title:decision === "review" ?
+      "طلبكم قيد المراجعة" : decision === "reject" ? "تعذّر قبول طلبكم" : "تم إلغاء طلبكم",
+      to:"/bookings/"+o.id,read:false,at:new Date().toISOString()});
+  }
+  if (action === "SIGN" && o.contract && p.contractVersion !== undefined &&
+      p.contractVersion !== o.contract.version)
+    fail("تغير إصدار العقد؛ راجع النسخة الجديدة",409);
+  if (o?.contract && ["PRICE","PUBLISH","ALTERNATIVE","REVIEW"].includes(action))
+    fail("صدر العقد. استخدم إجراء إصدار نسخة معدّلة أو الملحق",409);
+  if (action === "SUPPLIER_RESPONSE" && o.contract && !verifyPublished)
+    fail("العقد صادر. سجّل التأكيد دون تغيير البنود أو راجع إجراءات الإلغاء",409);
+  if (action === "SIGN" && !o.lines.every(line => line.response === "CONFIRMED_SUPPLIER"))
+    fail("يلزم تحقق الفريق من توفر جميع الخدمات قبل التوقيع", 409);
   if (action === "AMENDMENT_CREATE") {
     if (
       o.contract?.status !== "SIGNED" ||
@@ -787,6 +1000,7 @@ export async function executeCommand(
       (actor.role === "supplier" && svc.supplierId !== actor.supplierId)
     )
       fail("الخدمة غير مخولة", 403);
+    await c.query("SELECT id FROM catalog_services WHERE id=$1 FOR UPDATE", [p.serviceId]);
     await c.query(
       "INSERT INTO service_availability(service_id,event_date,capacity,blocked) VALUES($1,$2,$3,$4) ON CONFLICT(service_id,event_date) DO UPDATE SET capacity=EXCLUDED.capacity,blocked=EXCLUDED.blocked",
       [p.serviceId, p.date, p.capacity, !!p.blocked],
@@ -813,16 +1027,16 @@ export async function executeCommand(
       s.notifications.unshift({id:randomUUID(),userId:o.customerId,title:"ملحق طلبك جاهز للمراجعة والتوقيع",to:"/bookings/"+o.id,read:false,at:new Date().toISOString()});
     }
     next = s;
-  } else if (["COUPON", "ALTERNATIVE"].includes(action)) next = s;
+  } else if (verifyPublished || ["COUPON", "ALTERNATIVE", "ORDER_REVIEW_DECISION", "ORDER_DETAILS", "CONTRACT_REVISE"].includes(action)) next = s;
   else {
     const coupon = s.coupon;
-    if (action === "SUBMIT") s.coupon = 0;
+    if (submission) s.coupon = 0;
     try {
-      next = dispatch(s, action, p);
+      next = dispatch(s, assisted ? "SUBMIT" : action, p);
     } catch (error) {
       fail(error.message, 409);
     }
-    if (action === "SUBMIT") {
+    if (submission) {
       const newOrder = next.orders[0],
         id = "HB-" + randomUUID();
       const previousId = newOrder.id;
@@ -830,6 +1044,13 @@ export async function executeCommand(
       newOrder.discount = coupon?.percent
         ? couponDiscount(newOrder.lines, coupon)
         : 0;
+      if (assisted) {
+        newOrder.createdBy = actor.id;
+        newOrder.source = "ASSISTED";
+        if (p.discount > pricing(newOrder.lines).subtotal) fail("الخصم خارج الحدود المسموحة", 409);
+        newOrder.discount = p.discount || 0;
+      }
+      newOrder.financials = totals(newOrder.lines, newOrder.discount, 0, s.settings.taxRate || 0);
       next.activeOrder = id;
       next.notifications = next.notifications.map((n) => ({
         ...n,
@@ -843,14 +1064,14 @@ export async function executeCommand(
     if (!p.id) fail("استخدم دعوة حساب حقيقية", 409);
     const updatedUser = next.users.find((u) => u.id === p.id);
     if (!updatedUser) fail("المستخدم غير موجود", 404);
-    z.enum(["customer", "staff", "admin", "supplier"]).parse(updatedUser.role);
+    z.enum(["customer", "staff", "admin"]).parse(updatedUser.role);
     if (
       p.id === actor.id &&
       (!updatedUser.active || updatedUser.role !== "admin")
     )
       fail("لا يمكن تعطيل حساب المالك الحالي");
     await c.query(
-      "UPDATE users SET name=$2,role=$3,active=$4,updated_at=now() WHERE id=$1",
+      "UPDATE users SET name=$2,role=$3,active=$4,staff_role_id=CASE WHEN $3='staff' THEN staff_role_id ELSE NULL END,updated_at=now() WHERE id=$1",
       [p.id, updatedUser.name, updatedUser.role, !!updatedUser.active],
     );
     await c.query("DELETE FROM sessions WHERE user_id=$1", [p.id]);
@@ -970,12 +1191,14 @@ export async function executeCommand(
           )
         : 1;
       await c.query(
-        "INSERT INTO bookings(id,customer_id,status,occasion_date,version,data) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,version=EXCLUDED.version,data=EXCLUDED.data,updated_at=now()",
+        "INSERT INTO bookings(id,customer_id,status,occasion_date,version,data) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,occasion_date=EXCLUDED.occasion_date,version=EXCLUDED.version,data=EXCLUDED.data,updated_at=now()",
         [b.id, b.customerId, b.status, b.occasion.date, b.version, b],
       );
       if (
         [
           "SUBMIT",
+          "ASSISTED_SUBMIT",
+          "ORDER_DETAILS",
           "PUBLISH",
           "SIGN",
           "RENEW",
@@ -1082,18 +1305,23 @@ export async function executeCommand(
         [n.id, n.userId, n],
       );
       const u = next.users.find((x) => x.id === n.userId);
-      if (u?.email)
+      if (u?.email) {
+        const template = (await rows(c,
+          "SELECT r.value FROM content_publications p JOIN content_revisions r ON r.id=p.revision_id WHERE p.content_key='notifications.booking.body'",
+        ))[0]?.value || "{العنوان} {الرابط}";
+        const message = template.replaceAll("{العنوان}",n.title).replaceAll("{الرابط}",(process.env.APP_ORIGIN || "") + n.to);
         await c.query(
           "INSERT INTO outbox(job_type,payload,dedupe_key) VALUES('EMAIL',$1,$2) ON CONFLICT DO NOTHING",
           [
             {
               to: u.email,
               subject: n.title,
-              text: n.title + " " + (process.env.APP_ORIGIN || "") + n.to,
+              text: message,
             },
             "notification:" + n.id,
           ],
         );
+      }
     }
   if (action === "READ")
     await c.query(
@@ -1115,8 +1343,10 @@ export async function executeCommand(
     "lastRemoved",
     "coupon",
     "lastPayment",
-  ])
-    if (next[k] !== undefined) ws[k] = next[k];
+  ]) {
+    const source = assisted && k !== "activeOrder" ? old : next;
+    if (source[k] !== undefined) ws[k] = source[k];
+  }
   await c.query(
     "INSERT INTO workspaces(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data,updated_at=now()",
     [wid, ws],
@@ -1126,9 +1356,9 @@ export async function executeCommand(
     [
       actor?.id || null,
       action,
-      orderActions.has(action) ? "booking" : "command",
-      p.id || wid,
-      o || null,
+      orderActions.has(action) || assisted ? "booking" : "command",
+      assisted ? next.activeOrder : p.id || wid,
+      old.orders.find(order => order.id === o?.id) || null,
       { payload: Object.fromEntries(Object.entries(p).map(([key,value]) => [key, typeof value === "string" && value.startsWith("data:image/") ? "image updated" : value])), status: next.orders.find((x) => x.id === p.id)?.status },
     ],
   );

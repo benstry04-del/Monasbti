@@ -104,7 +104,7 @@ test("real public catalog and auth layout fit approved breakpoints", async ({
   }
   expect(errors).toEqual([]);
 });
-test("customer, supplier, staff and owner complete an actual contract workflow without authenticator setup", async ({
+test("customer, staff and owner complete an actual contract workflow without authenticator setup", async ({
   browser,
 }) => {
   test.setTimeout(180000);
@@ -155,26 +155,10 @@ test("customer, supplier, staff and owner complete an actual contract workflow w
     await expect(
       customer.getByText(id, { exact: false }).first(),
     ).toBeVisible();
-    const supplier = await login("supplier");
-    await supplier.goto("/supplier/requests/" + id);
-    await expect(supplier.locator(".experience-app")).not.toHaveAttribute(
-      "inert",
-      "",
-    );
-    await supplier
-      .getByRole("button", { name: "تأكيد التوفر والتكلفة", exact: true })
-      .click();
-    await expect(supplier.locator(".supplier-line .badge")).toContainText(
-      "تم التأكيد",
-    );
-    await fit(supplier);
-    await supplier.locator('input[type="file"]').setInputFiles('public/assets/coffee.jpg');
-    await expect(supplier.getByRole('link',{name:'coffee.jpg',exact:true})).toBeVisible();
-    const filePath=await supplier.getByRole('link',{name:'coffee.jpg',exact:true}).getAttribute('href');
-    expect((await supplier.request.get(filePath!)).status()).toBe(200);
-    expect((await customer.request.get(filePath!)).status()).toBe(403);
+    const coordinator = await login("staff");
+    await command("SUPPLIER_RESPONSE", {id,lineId:"s1",response:"CONFIRMED_SUPPLIER",cost:200,reason:"تم التأكيد هاتفيًا"}, coordinator);
     for (const role of ["staff", "admin"]) {
-      const p = await login(role);
+      const p = role === "staff" ? coordinator : await login(role);
       operators[role]=p;
       await p.goto("/admin/orders/" + id);
       await expect(p.locator(".experience-app")).not.toHaveAttribute(
@@ -234,7 +218,7 @@ test("customer, supplier, staff and owner complete an actual contract workflow w
     const extra=catalog.services.find((s:any)=>s.id!=='s1' && s.supplierId===source.supplierId);
     expect(extra).toBeTruthy();
     await command('AMENDMENT_CREATE',{id,serviceId:extra.id},operators.staff);
-    await command('AMENDMENT_CONFIRM',{id},supplier);
+    await command('AMENDMENT_CONFIRM',{id},operators.admin);
     await command('AMENDMENT_APPROVE',{id,reason:'مراجعة الموظف للملحق'},operators.staff);
     await command('AMENDMENT_APPROVE',{id,reason:'مراجعة المالك للملحق'},operators.admin);
     await customer.goto('/bookings/'+id);
@@ -275,11 +259,7 @@ test("customer, supplier, staff and owner complete an actual contract workflow w
     await expect(admin.getByRole('button',{name:'إرسال التحويل المعتمد',exact:true})).toBeDisabled();
     await expect(admin.getByText('معتمدة للتحويل',{exact:true})).toBeVisible();
     await fit(admin);await admin.evaluate(()=>window.scrollTo(0,0));await admin.screenshot({path:'docs/production/supplier-settlements-desktop.png',fullPage:true});
-    await supplier.goto('/supplier/settlements');
-    await expect(supplier.locator('.experience-app')).not.toHaveAttribute('inert','');
-    await expect(supplier.getByText('معتمدة للتحويل',{exact:true})).toBeVisible();
-    await expect(supplier.getByRole('button',{name:'إرسال التحويل المعتمد',exact:true})).toHaveCount(0);
-    await fit(supplier);await supplier.setViewportSize({width:390,height:844});await supplier.screenshot({path:'docs/production/supplier-settlements-mobile.png',fullPage:true});
+
     await admin.goto('/admin/integrations');
     await expect(admin.getByRole('heading',{name:'الربط والتفعيل',exact:true,level:2})).toBeVisible();
     const paymentCard=admin.getByRole('region',{name:'دفع العملاء',exact:true});
@@ -308,8 +288,6 @@ test("customer, supplier, staff and owner complete an actual contract workflow w
     await customer.goto('/dashboard');
     await expect(customer.getByRole('heading',{name:'كل مناسباتك',exact:true})).toBeVisible();
     await expect(customer.getByLabel('ترقيم النتائج')).toBeVisible();
-    await supplier.goto('/supplier/requests');
-    await expect(supplier.getByLabel('ترقيم النتائج')).toBeVisible();
 
   } finally {
     await Promise.allSettled(contexts.map((c) => c.close()));
@@ -427,7 +405,6 @@ for (const width of [390, 768, 1024, 1440]) {
     const header = page.locator(".header");
     for (const [role, destination, label] of [
       ["customer", "/dashboard", "لوحة مناسبتكم"],
-      ["supplier", "/supplier", "بوابة المورد"],
       ["staff", "/admin", "لوحة الإدارة"],
       ["admin", "/admin", "لوحة الإدارة"],
     ]) {
@@ -569,4 +546,46 @@ test("admin sections keep the shell, sidebar scroll and active link during navig
   await page.keyboard.press("Escape");
   await expect(open).toBeFocused();
   expect(documentRequests).toEqual([]);
+});
+
+test("back office records and content publishing work in the admin workspace", async ({ page, context }) => {
+  await context.setExtraHTTPHeaders({ "X-Forwarded-For": "192.0.2.25" });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/auth/login");
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+  await page.getByLabel("البريد الإلكتروني", { exact: true }).fill("admin@demo.kw");
+  await page.getByLabel("كلمة المرور", { exact: true }).fill("E2E-Isolated-Password!");
+  await page.getByRole("button", { name: "تسجيل الدخول", exact: true }).click();
+  await expect(page).toHaveURL(url => url.pathname === "/admin");
+
+  await page.goto("/admin/expenses/new");
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+  const today = new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kuwait"}).format(new Date());
+  await page.getByLabel("تاريخ المصروف").fill(today);
+  await page.getByLabel("التصنيف").fill("مصروف اختبار");
+  await page.getByLabel("المبلغ بالدينار").fill("42");
+  await page.getByLabel("المدفوع بالدينار").fill("24");
+  await page.getByLabel("طريقة الدفع").fill("تحويل");
+  await page.getByRole("button",{name:"حفظ المصروف"}).click();
+  await expect(page).toHaveURL(/\/admin\/expenses\/[a-f\d-]{36}$/);
+  await expect(page.getByRole("heading",{name:"سجل التغييرات"})).toBeVisible();
+
+  await page.goto("/admin/content");
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
+  const title = "عنوان معاينة المحتوى";
+  await page.getByRole("textbox",{name:"القيمة",exact:true}).fill(title);
+  await page.getByRole("button",{name:"حفظ مسودة"}).click();
+  await expect(page.getByRole("button",{name:"نشر",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"معاينة الصفحة"}).click();
+  await expect(page.frameLocator("#content-preview").getByRole("heading",{name:title,exact:true})).toBeVisible({timeout:15000});
+  await page.getByRole("button",{name:"نشر",exact:true}).click();
+  await expect(page.getByRole("button",{name:"نشر",exact:true})).toHaveCount(0);
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:title,exact:true})).toBeVisible({timeout:15000});
+  for (const width of [390, 768, 1440]) {
+    await page.setViewportSize({width,height:900});
+    await page.goto("/admin/procurement/new");
+    await expect(page.getByRole("heading",{name:"طلبات التوريد",exact:true})).toBeVisible({timeout:15000});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+  }
 });

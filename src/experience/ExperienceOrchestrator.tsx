@@ -1,3 +1,4 @@
+import { useContent } from "../content";
 import {branding} from "../branding.mjs";
 import {useStore} from "../store";
 import React, {
@@ -41,6 +42,7 @@ export function ExperienceOrchestrator({
 }: {
   children: React.ReactNode;
 }) {
+  const contentText = useContent();
   const store = useStore();
   const identity = branding(store.settings);
   const brandingReady = store.runtime?.ready !== false;
@@ -288,11 +290,11 @@ export function ExperienceOrchestrator({
               }
             />}
             <div className="experience-wordmark">
-              <span>يا هلا ومسهلا</span>
+              <span>{contentText("motion.splash.title","يا هلا ومسهلا")}</span>
               <small>
                 {continued
                   ? loadingMessages.generic
-                  : "لحظة… نزهّب لكم المكان"}
+                  : contentText("motion.splash.loading","لحظة… نزهّب لكم المكان")}
               </small>
             </div>
           </div>

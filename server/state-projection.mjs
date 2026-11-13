@@ -3,7 +3,7 @@ const minimal=new Set(['orders','quotes','contracts','approvals','payments','use
 export async function stateProjection(c,actor,route){
   if(typeof route!=='string' || route.length>300)return {};
   const path=route.split('?')[0];
-  const detail=path.match(/^\/(?:admin\/orders|bookings|quote|contract|checkout)\/([^/]+)$/);
+  const detail=path.match(/^\/(?:admin\/(?:orders|contracts|quotes)|bookings|quote|contract|checkout)\/([^/]+)$/);
   if(detail){let id;try{id=decodeURIComponent(detail[1]);}catch{return {light:true,bookingIds:[]};}return {light:true,catalog:true,payments:true,bookingIds:[id]};}
   if(actor?.role==='customer' && path==='/dashboard'){
     const row=(await c.query("SELECT id FROM bookings WHERE customer_id=$1 ORDER BY (id=COALESCE((SELECT data->>'activeOrder' FROM workspaces WHERE id=$1),'')) DESC,created_at DESC,id LIMIT 1",[actor.id])).rows[0];
@@ -16,7 +16,7 @@ export async function stateProjection(c,actor,route){
       const ids=(await c.query(`SELECT id FROM (SELECT id FROM bookings ORDER BY created_at DESC,id LIMIT 5) a UNION SELECT id FROM (SELECT id FROM bookings WHERE data->'contract' IS NOT NULL AND data->'contract'<>'null'::jsonb ORDER BY created_at DESC,id LIMIT 5) b UNION SELECT id FROM (SELECT id FROM bookings WHERE occasion_date>=current_date AND status NOT IN ('CANCELLED','EXPIRED') ORDER BY occasion_date,id LIMIT 3) c`)).rows.map(r=>r.id);
       return {light:true,catalog:true,bookingIds:ids,overview:true};
     }
-    const page=path.split('/')[2];if(path.startsWith('/admin/') && minimal.has(page))return {light:true,bookingIds:[],catalog:['catalog','packages','suppliers','users','reports'].includes(page)};
+    const page=path.split('/')[2];if(path.startsWith('/admin/') && minimal.has(page))return {light:true,bookingIds:[],catalog:['catalog','packages','suppliers','users','reports','roles','assisted','procurement','expenses'].includes(page)};
   }
   return {};
 }
@@ -44,7 +44,7 @@ export async function adminAnalytics(c){
 export async function projectedState(c,actor,visitorId,route){
   const projection=await stateProjection(c,actor,route),state=await readState(c,actor,visitorId,false,null,projection);
   if(['admin','staff'].includes(actor?.role)){
-    if(projection.overview)state.analytics=await adminAnalytics(c);
+    if(projection.overview && !actor.staffRoleId)state.analytics=await adminAnalytics(c);
     state.counters={ownerApprovals:Number((await c.query("SELECT count(*) FROM bookings WHERE status='NEEDS_OWNER_APPROVAL'")).rows[0].count)};
   }
   return state;

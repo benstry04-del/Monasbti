@@ -1,3 +1,4 @@
+import { useContent } from "../../content";
 import {branding} from "../../branding.mjs";
 import {useStore} from "../../store";
 import React, { useEffect, useRef } from "react";
@@ -9,7 +10,8 @@ export function PromoFilmCard() {
   const { openPromo } = useExperience(),
     ref = useRef<HTMLElement>(null);
   const state = useStore();
-  const visible = state.runtime?.ready !== false && branding(state.settings).originalFilm;
+  const contentText = useContent();
+  const visible = state.runtime?.ready !== false && branding(state.settings).originalFilm && contentText("home.promo.visible","true") !== "false";
   useEffect(() => {
     if (!visible || !ref.current || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
@@ -40,13 +42,13 @@ export function PromoFilmCard() {
         <div className="promo-film-overlay" />
         <div className="promo-film-copy">
           <span className="motion-overline">HABB ALSAAD · THE EXPERIENCE</span>
-          <h2 id="promo-film-title">شوفي كيف تبدأ الحكاية</h2>
-          <p>20 ثانية من الفراغ… إلى ليلة كاملة</p>
+          <h2 id="promo-film-title">{contentText("home.promo.title","شوفي كيف تبدأ الحكاية")}</h2>
+          <p>{contentText("home.promo.text","20 ثانية من الفراغ… إلى ليلة كاملة")}</p>
           <button className="promo-film-button" onClick={openPromo}>
             <span>
               <Play size={17} fill="currentColor" />
             </span>
-            شاهد التجربة
+            {contentText("home.promo.cta","شاهد التجربة")}
             <ArrowLeft size={17} />
           </button>
         </div>

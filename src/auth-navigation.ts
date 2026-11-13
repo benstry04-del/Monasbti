@@ -1,7 +1,17 @@
+import { hasPermission, staffSections } from "./staff-permissions.mjs";
 export const staffAllowed = [
   "", "orders", "quotes", "approvals", "contracts", "suppliers",
   "customers", "events", "reports", "audit", "settlements", "deliveries",
 ];
+
+export function canOpenAdminPage(actor, page: string) {
+  if (actor?.role === "admin") return true;
+  if (actor?.role !== "staff") return false;
+  if (!page) return true;
+  if (page === "assisted") return hasPermission(actor, "orders.create");
+  if (["expenses","procurement","content"].includes(page)) return hasPermission(actor, staffSections[page]);
+  return actor.staffRoleId ? Boolean(staffSections[page] && hasPermission(actor,staffSections[page])) : staffAllowed.includes(page);
+}
 
 export function accountHome(role?: string) {
   if (role === "supplier") return "/supplier";

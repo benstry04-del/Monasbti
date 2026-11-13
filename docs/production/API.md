@@ -10,9 +10,8 @@ Same-origin `/api`; opaque signed HttpOnly session cookies, server-owned role an
 | POST /auth/register, /login | Registration creates a customer session immediately (201). Login requires a password; non-customer roles retain verification requirements. Both endpoints are throttled. |
 | POST /auth/verify, /resend | Email ownership verification where explicitly required; outside customer signup. |
 | POST /auth/forgot-password, /reset-password | Expiring single-use reset; revokes sessions |
-| POST /auth/mfa/complete | Privileged TOTP enrollment/challenge; replay protection |
 | POST /auth/logout | Session revocation |
-| POST /auth/invite | Owner invitation; activation sets password through emailed link |
+| POST /auth/invite | Owner invitations and authorized staff invitations for customers; activation sets a password through an emailed link |
 | GET /state | Authorized compatibility projection; costs and other parties' records excluded |
 | POST /commands | `{action,payload}`; transaction, server pricing/permissions, audit and idempotency |
 | GET /catalog/:kind | Services/packages/suppliers; `q`, `page`, `pageSize` |
@@ -36,7 +35,7 @@ Confirm route details against `server/app.mjs`, `auth.mjs` and `integrations.mjs
 - Customer: own profile, workspace, favorites, cart, drafts, bookings, quotes, consent, payments, cancellations, feedback and support.
 - Supplier: assigned service lines, confirmations, execution, own uploads and service/date availability; no customer retail payment ledger or other supplier invoices.
 - Staff: operational bookings, supplier coordination, one independent approval, permitted reports. Cannot impersonate owner, administer users or settle refunds by hand.
-- Admin/owner: commercial settings, team invitations, catalogs, distinct owner approval and authorized refunds. MFA mandatory for admin/staff. Role changes revoke sessions; self-demotion of the active owner is rejected.
+- Admin/owner: commercial settings, team invitations, catalogs, distinct owner approval and authorized refunds. Role changes revoke sessions; self-demotion of the active owner is rejected.
 
 ## State machines
 
@@ -60,3 +59,13 @@ Supplier settlement endpoints, independent approvals, idempotency and authoritat
 - `GET /api/report-summary?period=6&occasion=`: owner/staff only; aggregate totals, funnel counts and monthly net cash/cost/tax from persisted financial records and completed refunds. Date/occasion filters execute in SQL. Read-only repeatable snapshots do not consume financial SERIALIZABLE predicate locks.
 - `GET /api/calendar?month=YYYY-MM`: authenticated, scoped customer/supplier or owner/staff event counts for the entire month, independent of displayed booking page.
 - `/api/state?route=` selects only bookings needed by the current screen. Initial owner overview is bounded to recent/relevant bookings; customer dashboard selects the owned active booking; supplier lists load booking pages separately. Header `X-App-Route` applies compatible projections after commands. Approval counters remain database-wide.
+
+## Back office
+
+- Supplier logins are retired. Migration 010 revokes supplier sessions and disables legacy accounts while preserving commercial records.
+- Migrations 011–013 add staff role assignments, expense and purchase-order records, scheduled expense instances, and content revisions.
+- `/backoffice/roles` and `/backoffice/role-assignments` are owner-only. Existing staff without an assignment retain the basic operating role.
+- `ASSISTED_SUBMIT` records the operator and beneficiary. The customer accepts and signs through their own session.
+- `/backoffice/records/{expenses,procurement}` lists records; the ID route loads detail and saves version-checked edits. Procurement print view is available under the ID at `/print`.
+- `/backoffice/content/:key` saves drafts and publishes selected revisions. `/content` returns published values.
+- Report gross profit uses collected revenue net of refunds and allocated direct costs and taxes. Net profit subtracts paid administrative expenses. Supplier purchase orders are tracked separately from administrative expenses.

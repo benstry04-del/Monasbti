@@ -19,7 +19,7 @@ for(const key of ['MYFATOORAH_API_KEY','MYFATOORAH_WEBHOOK_SECRET','SUPPLIER_PAY
 const {migrate}=await import('../server/migrate.mjs');await migrate();
 const {seedDemo}=await import('../server/seed-demo.mjs');await seedDemo();
 const db=await import('../server/db.mjs');const {verifyPassword}=await import('../server/security.mjs');
-for(const role of ['customer','staff','admin','supplier']){
+for(const role of ['customer','staff','admin']){
   const user=(await db.query('SELECT password_hash,role FROM users WHERE email=$1',[role+'@demo.kw'])).rows[0];
   if(!user || user.role!==role || !await verifyPassword(access.password,user.password_hash))throw Error('Trial account verification failed: '+role);
 }
@@ -27,4 +27,4 @@ const {createApp}=await import('../server/app.mjs');const app=await createApp();
 const stop=async()=>{await app.close();await db.pool.end();};
 process.once('SIGINT',()=>stop());process.once('SIGTERM',()=>stop());
 await app.listen({host:'127.0.0.1',port:4302});
-console.log(JSON.stringify({trial:origin+'/auth/login',accountsVerified:4,accessFile:credentialsPath}));
+console.log(JSON.stringify({trial:origin+'/auth/login',accountsVerified:3,accessFile:credentialsPath}));

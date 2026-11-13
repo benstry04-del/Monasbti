@@ -40,7 +40,6 @@ export async function seedDemo(env = process.env) {
       ["customer", "customer", "عميل بيئة التطوير", null],
       ["staff", "staff", "موظف بيئة التطوير", null],
       ["admin", "admin", "مالك بيئة التطوير", null],
-      ["supplier", "supplier", "مورد بيئة التطوير", "v1"],
     ]) {
       await client.query(
         "INSERT INTO users(id,email,name,mobile,role,supplier_id,password_hash,verified_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(id) DO NOTHING",

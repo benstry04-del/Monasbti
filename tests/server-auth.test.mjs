@@ -113,13 +113,14 @@ test('password reset is single-use, queued and revokes all existing sessions', a
   r = await client.request('POST','/api/auth/login',{email:account.email,password:account.password}); assert.equal(r.status,401);
   r = await client.request('POST','/api/auth/login',{email:account.email,password:'New secure passphrase 2026!'}); assert.equal(r.status,200);
 });
-test('all roles log in directly with passwords, including previously enrolled accounts',async()=>{
+test('internal roles log in and retired suppliers cannot sign in',async()=>{
   const password='Direct login passphrase 2026!';
   await db.query("INSERT INTO suppliers(id,name) VALUES('direct-login-vendor','مورد اختبار')");
   for(const role of ['customer','supplier','staff','admin']){
     const id='direct-'+role,client=browser();await client.request('GET','/api/auth/session');
     await db.query("INSERT INTO users(id,email,name,role,supplier_id,password_hash,verified_at,mfa_secret) VALUES($1,$2,$1,$3,$4,$5,now(),'legacy-encrypted-authenticator')",[id,id+'@example.test',role,role==='supplier'?'direct-login-vendor':null,await hashPassword(password)]);
     const response=await client.request('POST','/api/auth/login',{email:id+'@example.test',password});
+    if (role === "supplier") { assert.equal(response.status,401); continue; }
     assert.equal(response.status,200);assert.equal(response.body.user.role,role);assert.equal(response.body.user.mfaVerified,false);
     assert.equal(response.body.mfaRequired,undefined);assert.equal(response.body.mfaEnrollmentRequired,undefined);assert.equal(response.body.secret,undefined);
     assert.equal((await client.request('GET','/api/auth/session')).body.user.role,role);

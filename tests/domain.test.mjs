@@ -14,12 +14,15 @@ test("later milestone payment preserves event preparation status", () => {
 test("package configuration matches the cart total", () => {
   let s = seed();
   const pack = s.packages[1];
-  s = dispatch(s, "CART_PACKAGE", {
-    id: pack.id,
-    qty: 2,
-    guests: pack.capacity,
-  });
-  assert.equal(pricing(s.cart).total, pack.price * 2);
+  assert.throws(() => dispatch(s, "CART_PACKAGE", { id:pack.id, qty:2 }), /مرة واحدة/);
+  s = dispatch(s, "CART_PACKAGE", { id:pack.id, guests:pack.capacity });
+  assert.equal(pricing(s.cart).total, pack.price);
+  assert.throws(() => dispatch(s, "CART_PACKAGE", { id:pack.id }), /موجودة/);
+  assert.throws(() => dispatch(s, "CART_QTY", { id:s.cart[0].id, qty:2 }), /تخصيص/);
+  s = dispatch(s, "CART_REMOVE", { id:s.cart[0].id });
+  assert.equal(s.cart.length,0);
+  s = dispatch(s, "CART_UNDO");
+  assert.equal(pricing(s.cart).total,pack.price);
 });
 test("signed contract payment schedule survives settings changes", () => {
   let s = signed();

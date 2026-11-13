@@ -1,3 +1,5 @@
+import { hasPermission } from "../src/staff-permissions.mjs";
+import { packageIdOf } from "../src/domain.mjs";
 import { currentBrand } from "./providers/documents.mjs";
 import { randomInt, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -59,15 +61,10 @@ const invitationInput = z
   .object({
     email,
     name,
-    role: z.enum(["customer", "supplier", "staff", "admin"]),
-    supplierId: z.string().min(1).max(100).optional(),
+    role: z.enum(["customer", "staff", "admin"]),
     mobile: z.string().max(24).default(""),
   })
-  .strict()
-  .refine(
-    (x) => x.role !== "supplier" || !!x.supplierId,
-    "Supplier identity required",
-  );
+  .strict();
 const publicUser = (user) => ({
   id: user.id,
   email: user.email,
@@ -75,6 +72,8 @@ const publicUser = (user) => ({
   mobile: user.mobile,
   role: user.role,
   supplierId: user.supplier_id,
+  staffRoleId: user.staff_role_id || null,
+  permissions: user.staff_permissions || [],
   verifiedAt: user.verified_at,
   mfaVerified: !!user.mfa_verified,
 });
@@ -152,7 +151,9 @@ async function issueSession(
       account = workspaces.find((x) => x.id === user.id)?.data || {};
     if (guest) {
       const cart = [...(account.cart || [])];
+      const accountPackages = new Set(cart.map(packageIdOf).filter(Boolean));
       for (const line of guest.cart || []) {
+        if (accountPackages.has(packageIdOf(line))) continue;
         const existing = cart.find((x) => x.id === line.id);
         if (existing) existing.qty = Math.min(10000, existing.qty + line.qty);
         else cart.push(line);
@@ -166,9 +167,7 @@ async function issueSession(
             ...(guest.favorites || []),
           ]),
         ],
-        ...((guest.cart || []).length
-          ? { planner: guest.planner || account.planner }
-          : {}),
+        planner: guest.planner || account.planner,
       };
       await client.query(
         "UPDATE workspaces SET data=$2,updated_at=now() WHERE id=$1",
@@ -242,7 +241,7 @@ export async function registerAuth(app, { db, config }) {
       if (decoded.valid && /^[\w-]{43}$/.test(decoded.value)) {
         const sessionHash = tokenHash(decoded.value);
         const result = await db.query(
-          `SELECT u.*,s.csrf_token,s.mfa_verified FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=$1 AND s.expires_at>now() AND u.active=true AND (u.role='customer' OR u.verified_at IS NOT NULL)`,
+          `SELECT u.*,s.csrf_token,s.mfa_verified,CASE WHEN r.active THEN r.permissions ELSE '[]'::jsonb END AS staff_permissions FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN staff_roles r ON r.id=u.staff_role_id WHERE s.id=$1 AND s.expires_at>now() AND u.active=true AND u.role<>'supplier' AND (u.role='customer' OR u.verified_at IS NOT NULL)`,
           [sessionHash],
         );
         const user = result.rows[0];
@@ -327,7 +326,7 @@ export async function registerAuth(app, { db, config }) {
         input.password,
         user?.password_hash || dummyHash,
       );
-      if (!correct || !user?.active) {
+      if (!correct || !user?.active || user.role === "supplier") {
         await audit(
           client,
           request,
@@ -423,7 +422,7 @@ export async function registerAuth(app, { db, config }) {
       );
       const user = (
         await client.query(
-          "UPDATE users SET verified_at=now(),updated_at=now() WHERE id=$1 AND active=true RETURNING *",
+          "UPDATE users SET verified_at=now(),updated_at=now() WHERE id=$1 AND active=true AND role<>'supplier' RETURNING *",
           [challenge.user_id],
         )
       ).rows[0];
@@ -450,7 +449,7 @@ export async function registerAuth(app, { db, config }) {
     await db.transaction(async (client) => {
       const user = (
         await client.query(
-          "SELECT * FROM users WHERE lower(email)=$1 AND active=true AND verified_at IS NULL FOR UPDATE",
+          "SELECT * FROM users WHERE lower(email)=$1 AND active=true AND role<>'supplier' AND verified_at IS NULL FOR UPDATE",
           [input.email],
         )
       ).rows[0];
@@ -466,7 +465,7 @@ export async function registerAuth(app, { db, config }) {
       await db.transaction(async (client) => {
         const user = (
           await client.query(
-            "SELECT * FROM users WHERE lower(email)=$1 AND active=true FOR UPDATE",
+            "SELECT * FROM users WHERE lower(email)=$1 AND active=true AND role<>'supplier' FOR UPDATE",
             [input.email],
           )
         ).rows[0];
@@ -491,7 +490,7 @@ export async function registerAuth(app, { db, config }) {
     await db.transaction(async (client) => {
       const challenge = (
         await client.query(
-          "SELECT * FROM auth_tokens WHERE token_hash=$1 AND purpose IN ('RESET','INVITE') AND consumed_at IS NULL AND expires_at>now() FOR UPDATE",
+          "SELECT * FROM auth_tokens WHERE token_hash=$1 AND user_id IN (SELECT id FROM users WHERE role<>'supplier') AND purpose IN ('RESET','INVITE') AND consumed_at IS NULL AND expires_at>now() FOR UPDATE",
           [tokenHash(input.token)],
         )
       ).rows[0];
@@ -539,11 +538,13 @@ export async function registerAuth(app, { db, config }) {
     "/api/auth/invite",
     { preHandler: app.authenticate, ...rate(20, "1 hour") },
     async (request, reply) => {
-      if (request.actor.role !== "admin")
-        throw httpError(403, "لا تملك صلاحية دعوة المستخدمين");
       const input = validation(invitationInput, request.body);
+      if (request.actor.role !== "admin" &&
+          !(input.role === "customer" && hasPermission(request.actor, "customers.create")))
+        throw httpError(403, "لا تملك صلاحية دعوة المستخدمين");
+      let invitedUserId;
       try {
-        await db.transaction(async (client) => {
+        invitedUserId = await db.transaction(async (client) => {
           const userId = `u-${randomUUID()}`;
           await client.query(
             "INSERT INTO users(id,email,name,mobile,role,supplier_id,password_hash,active) VALUES($1,$2,$3,$4,$5,$6,$7,false)",
@@ -553,7 +554,7 @@ export async function registerAuth(app, { db, config }) {
               input.name,
               input.mobile,
               input.role,
-              input.supplierId || null,
+              null,
               "!INVITED",
             ],
           );
@@ -568,15 +569,16 @@ export async function registerAuth(app, { db, config }) {
           );
           await audit(client, request, "AUTH_INVITED", userId, {
             role: input.role,
-            supplierId: input.supplierId || null,
+            supplierId: null,
           });
+          return userId;
         });
       } catch (error) {
         if (error.code === "23505")
           throw httpError(409, "هذا البريد مسجل بالفعل");
         throw error;
       }
-      return reply.code(202).send({ ok: true });
+      return reply.code(202).send({ ok: true, id: invitedUserId });
     },
   );
 }

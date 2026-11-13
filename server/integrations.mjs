@@ -1,3 +1,4 @@
+import { businessPDF } from "./providers/business-pdf.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, writeFile, unlink, readFile } from "node:fs/promises";
 import { resolve, basename } from "node:path";
@@ -841,6 +842,13 @@ export async function registerIntegrationRoutes(app) {
       .type(f.mime)
       .send(buffer);
   });
+  app.get("/api/contracts/:bookingId/versions", authed, async request => {
+    const booking = await bookingAccess(db, request.actor, request.params.bookingId);
+    return (await db.query(
+      "SELECT version,status,document_hash,created_at,signed_at,data->>'kind' AS kind FROM contracts WHERE booking_id=$1 ORDER BY version DESC",
+      [booking.id],
+    )).rows;
+  });
   app.get("/api/contracts/:bookingId", authed, async (request, reply) => {
     const b = await bookingAccess(db, request.actor, request.params.bookingId);
     const version = request.query.version
@@ -854,17 +862,32 @@ export async function registerIntegrationRoutes(app) {
     ).rows[0];
     if (!c) throw integrationError("العقد غير جاهز", 404);
     if(c.data.externalSignature?.fileId)return reply.redirect('/api/files/'+c.data.externalSignature.fileId);
+    if (request.query.format === "pdf") {
+      const data = c.data;
+      return reply.type("application/pdf")
+        .header("Content-Disposition",`attachment; filename="contract-v${c.version}.pdf"`)
+        .send(businessPDF({
+          settings:{brand:data.branding?.title || ""}, title:data.kind === "AMENDMENT" ? "ملحق عقد تنظيم مناسبة" : "عقد تنظيم مناسبة",
+          reference:`${b.id} · V${c.version}`,
+          fields:[data.company?.name,data.company?.registrationNumber,
+            "العميل: "+b.data.customer,"تاريخ المناسبة: "+b.data.occasion.date,
+            c.status === "SIGNED" ? "العقد موقّع" : "بانتظار التوقيع"],
+          lines:(data.snapshot || data.lines || []).map(line=>({title:line.title,quantity:line.qty,price:line.price})),
+          total:data.total, notes:[data.terms || data.clauses,
+            (data.paymentSchedule || []).join("% / ")+"%",data.signature,c.document_hash],
+        }));
+    }
     // Render the frozen version, never the mutable catalog.
     const html = c.data.html || contractHTML(b, c);
     return reply
       .header("Cache-Control", "private, no-store")
       .header(
         "Content-Security-Policy",
-        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'",
       )
       .header(
         "Content-Disposition",
-        `attachment; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.html"`,
+        `${request.query.preview === "1" ? "inline" : "attachment"}; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.html"`,
       )
       .type("text/html; charset=utf-8")
       .send(html);

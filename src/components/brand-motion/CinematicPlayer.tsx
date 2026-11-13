@@ -1,3 +1,4 @@
+import { useContent } from "../../content";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
@@ -53,9 +54,13 @@ export function CinematicPlayer({
     [duration, setDuration] = useState(20.01),
     [sourceEnabled, setSourceEnabled] = useState(flags.media !== "slow"),
     [retry, setRetry] = useState(0);
-  const sources = useMemo(
-    () => selectFilmSources(),
-    [flags.media, flags.network, retry],
+  const contentText = useContent();
+  const campaignVideo = first ? "" : contentText("home.promo.video","");
+  const sources = useMemo(() =>
+    /^\/(assets|brand-motion)\/[a-z0-9_./-]+\.(mp4|webm)$/i.test(campaignVideo)
+      ? [{src:campaignVideo,type:campaignVideo.endsWith(".webm")?"video/webm":"video/mp4"}]
+      : selectFilmSources(),
+    [campaignVideo, flags.media, flags.network, retry],
   );
   const exit = (skipped = true, isFailed = false) => {
     if (finished.current) return;

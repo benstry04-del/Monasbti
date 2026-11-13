@@ -1,3 +1,4 @@
+import { useContent } from "./content";
 import {branding} from "./branding.mjs";
 import {useRecordPage,RecordPager} from './record-pagination';
 import { couponDiscount, installmentMinors } from "./money.mjs";
@@ -72,6 +73,7 @@ import { api, useStore, isDemo } from "./store";
 import { RealAuth } from "./real-auth";
 import { accountHome, authPath, loginDestination } from "./auth-navigation";
 import {
+  packageIdOf,
   occasions,
   categories,
   labels,
@@ -290,6 +292,7 @@ function exportFile(name: string, data: any, type = "application/json") {
 }
 function App() {
   const s = useStore();
+  const contentText = useContent();
   const identity = branding(s.settings);
   useEffect(() => {
     if (!isDemo && !s.runtime?.ready) return;
@@ -421,7 +424,7 @@ function App() {
   const canPlan = !signedIn || role === "customer";
   const loginLink = authPath("login");
   useEffect(() => {
-    if (isDemo || !authReady || !signedIn || !inAuth) return;
+    if (isDemo || !authReady || !signedIn || !inAuth || new URLSearchParams(location.search).has("contentPreview") && window.parent !== window) return;
     const next = new URLSearchParams(location.search).get("next") || "";
     history.replaceState({}, "", loginDestination(role, next));
     dispatchEvent(new PopStateEvent("popstate"));
@@ -429,8 +432,6 @@ function App() {
   const isAdmin = path.startsWith("/admin"),
     isSupplier = path.startsWith("/supplier"),
     isCustomer = [
-      "/planner",
-      "/cart",
       "/request-review",
       "/quote/",
       "/contract/",
@@ -448,6 +449,7 @@ function App() {
         (p.endsWith("/") && path.startsWith(p)),
     );
   const denied =
+    (!isDemo && isSupplier) ||
     (isAdmin && !["admin", "staff"].includes(role)) ||
     (isSupplier && role !== "supplier") ||
     (isCustomer && !signedIn) ||
@@ -483,7 +485,7 @@ function App() {
     content = isDemo ? (
       <Auth {...shared} path={path} />
     ) : (
-      signedIn ? null : <RealAuth key={path} path={path} />
+      signedIn && !(new URLSearchParams(location.search).has("contentPreview") && window.parent !== window) ? null : <RealAuth key={path} path={path} />
     );
   else if (path === "/planner") content = <Planner {...shared} />;
   else if (path === "/cart") content = <Cart {...shared} />;
@@ -548,13 +550,13 @@ function App() {
               to="/services"
               className={path.startsWith("/services") ? "active" : ""}
             >
-              الخدمات
+              {contentText("global.header.services","الخدمات")}
             </Link>
             <Link
               to="/packages"
               className={path.startsWith("/packages") ? "active" : ""}
             >
-              الباقات
+              {contentText("global.header.packages","الباقات")}
             </Link>
             {canPlan && <Link to="/planner">زهّبوا مناسبتكم</Link>}
             <Link to="/about">{identity.name ? "عن " + identity.name : "عن المنصة"}</Link>
@@ -613,7 +615,7 @@ function App() {
               </>
             ) : !inAuth && (
               <Link to={loginLink} className="icon-btn header-login" aria-label="تسجيل الدخول" title="تسجيل الدخول">
-                <User size={19} /><span>تسجيل الدخول</span>
+                <User size={19} /><span>{contentText("global.header.login","تسجيل الدخول")}</span>
               </Link>
             ))}
             {canPlan && <Btn to="/planner" className="book-header">
@@ -807,6 +809,7 @@ function App() {
   );
 }
 function Footer() {
+  const contentText = useContent();
   const { settings } = useStore();
   const identity = branding(settings);
   return (
@@ -815,9 +818,7 @@ function Footer() {
         <div className="footer-brand-col">
           <Logo variant="footer" />
           <p>
-            نحوّل كل مناسبة لحكاية كويتية راقية تبيّض الوجه.
-            <br />
-            بروح السنع والذرابة، واهتمام فائق بأدق التفاصيل والمواجيب.
+            {contentText("global.footer.text","نحوّل كل مناسبة لحكاية كويتية راقية تبيّض الوجه. بروح السنع والذرابة، واهتمام فائق بأدق التفاصيل والمواجيب.")}
           </p>
           <div className="socials">
             <span>KW</span>
@@ -827,15 +828,15 @@ function Footer() {
         </div>
         <div>
           <h4>زهاب مناسبتكم</h4>
-          <Link to="/services">خدماتنا ونقوتنا</Link>
-          <Link to="/packages">الباقات المزهّبة</Link>
+          <Link to="/services">{contentText("global.footer.services","خدماتنا ونقوتنا")}</Link>
+          <Link to="/packages">{contentText("global.footer.packages","الباقات المزهّبة")}</Link>
           <Link to="/planner">تخطيط المناسبة</Link>
         </div>
         <div>
           <h4>فالكم طيب.. وحنا بخدمتكم</h4>
           <Link to="/about">{identity.name ? "عن " + identity.name : "عن المنصة"}</Link>
           <Link to="/faq">استفساراتكم وأسئلتكم</Link>
-          <Link to="/contact">تواصلوا ويانا</Link>
+          <Link to="/contact">{contentText("global.footer.contact","تواصلوا ويانا")}</Link>
         </div>
         <div>
           <h4>حياكم بأي وقت</h4>
@@ -877,9 +878,12 @@ function Footer() {
   );
 }
 function Hero({ title, sub, text, home = false, canPlan = true }: any) {
+  const contentText = useContent();
+  const link = contentText("home.hero.link","/planner");
+  const target = /^\/(?![\/\\])/.test(link) && !link.includes("\\") ? link : "/planner";
   return (
     <section className={"hero " + (home ? "home-hero" : "")}>
-      <div className="hero-image" />
+      <div className="hero-image" style={home && /^\/assets\/[a-z0-9_./-]+\.(jpg|jpeg|png|webp)$/i.test(contentText("home.hero.image","")) ? {backgroundImage:`url("${contentText("home.hero.image","")}")`} : undefined} />
       <div className="hero-shade" />
       <div className="container hero-content">
         <span className="eyebrow">
@@ -902,8 +906,8 @@ function Hero({ title, sub, text, home = false, canPlan = true }: any) {
                 <option key={o}>{o}</option>
               ))}
             </select>
-            <Btn to="/planner">
-              سمّوا وابدوا حكايتكم
+            <Btn to={target}>
+              {contentText("home.hero.cta","سمّوا وابدوا حكايتكم")}
               <ArrowLeft size={17} />
             </Btn>
           </div>
@@ -1005,6 +1009,7 @@ function PackageCard({ pack }: any) {
   );
 }
 function Home({ s }: any) {
+  const contentText = useContent();
   const brand = branding(s.settings).name || "المنصة";
   const occasionImages = [
     "wedding",
@@ -1021,15 +1026,15 @@ function Home({ s }: any) {
       <Hero
         home
         canPlan={!s.session || s.session.role === "customer"}
-        title="يا هلا ومسهلا.. زارتنا البركة"
-        sub="كل مناسبة تبيّض الوجه.. تبدي من هني"
+        title={contentText("home.hero.title","يا هلا ومسهلا.. زارتنا البركة")}
+        sub={contentText("home.hero.subtitle","كل مناسبة تبيّض الوجه.. تبدي من هني")}
         text={`من ليالي العمر وأفراح الأهل لي عزائم الديوانية والجمعات الطيبة، نزهّب لكم كل التفاصيل على أصولها.. استريحوا وخلو الباقي على سنع ${brand} وفالكم طيب.`}
       />
-      {!s.session && <section className="container welcome-path" aria-labelledby="welcome-path-title">
+      {(!s.session || new URLSearchParams(location.search).has("contentPreview")) && contentText("home.welcome.visible","true") !== "false" && <section className="container welcome-path" aria-labelledby="welcome-path-title">
         <div>
           <span className="eyebrow">أول مرة ويانا؟</span>
-          <h2 id="welcome-path-title">خلّ مناسبتكم تمشي على سنع</h2>
-          <p>خذوا فكرة عن الخدمات، اختاروا اللي يناسبكم، واحفظوا تجهيزاتكم بحسابكم علشان تردّون لها بأي وقت.</p>
+          <h2 id="welcome-path-title">{contentText("home.welcome.title","خلّ مناسبتكم تمشي على سنع")}</h2>
+          <p>{contentText("home.welcome.text","خذوا فكرة عن الخدمات، اختاروا اللي يناسبكم، واحفظوا تجهيزاتكم بحسابكم علشان تردّون لها بأي وقت.")}</p>
         </div>
         <div className="button-row">
           <Btn to="/auth/register?next=%2Fplanner">افتحوا حساب وابدوا <ArrowLeft size={17} /></Btn>
@@ -1712,9 +1717,9 @@ function Detail({ s, act, path, setModal }: any) {
         <aside className="card booking-card">
           <h3>احجزوا هـ{isPackage ? "الباقة السنعة" : "الخدمة السنعة"}</h3>
           <Price value={price * qty} />
-          <Field label="الكمية">
+          {!isPackage && <Field label="الكمية">
             <Counter value={qty} onChange={setQty} />
-          </Field>
+          </Field>}
           <Field label="طلبات خاصة بخاطركم (اختياري)">
             <textarea
               value={notes}
@@ -1726,14 +1731,10 @@ function Detail({ s, act, path, setModal }: any) {
           <Btn
             disabled={false}
             onClick={async () => {
-              if (isPackage) {
-                await act(
-                  "CART_PACKAGE",
-                  { id: item.id, qty, guests, option: color },
-                  "",
-                );
-              } else
-                await act("CART_ADD", { id: item.id, qty, option: color }, "");
+              const added = isPackage
+                ? await act("CART_PACKAGE", { id: item.id, guests, option: color }, "")
+                : await act("CART_ADD", { id: item.id, qty, option: color }, "");
+              if (!added) return;
               await act(
                 "PLANNER",
                 { guests, notes },
@@ -2401,7 +2402,7 @@ function Planner({ s, act, setToast }: any) {
                 setToast(
                   "حفظنا كل تفاصيل زهاب مناسبتكم.. استريحوا وردوا لنا بأي وقت وفالكم طيب",
                 );
-                go("/dashboard");
+                go(s.session ? "/dashboard" : authPath("register", "/planner"));
               }}
             >
               <Bookmark size={17} />
@@ -2428,12 +2429,13 @@ function Planner({ s, act, setToast }: any) {
   );
 }
 function Cart({ s, act, busy }: any) {
+  const contentText = useContent();
   const [coupon, setCoupon] = useState("");
   const total = pricing(s.cart, couponDiscount(s.cart, s.coupon));
   return (
     <>
       <Hero
-        title="سلة مناسبتكم"
+        title={contentText("booking.cart.title","سلة مناسبتكم")}
         sub="قريبين من جعل مناسبتكم واقعًا حلوًا يفرّح القلب"
         text="راجعوا تفاصيل اختياراتكم ودزوا الطلب للمراجعة، عشان يتواصل وياكم فريقنا ويؤكدها مع الموردين بكل أمانة وسنع."
       />
@@ -2470,10 +2472,10 @@ function Cart({ s, act, busy }: any) {
                     </div>
                     <Badge status="WAITING" />
                   </div>
-                  <Counter
+                  {packageIdOf(l) ? <small>ضمن الباقة</small> : <Counter
                     value={l.qty}
                     onChange={(qty) => act("CART_QTY", { id: l.id, qty }, "")}
-                  />
+                  />}
                   <div>
                     <Price value={l.price * l.qty} />
                     <small className="muted">سعر مبدئي</small>
@@ -2556,7 +2558,7 @@ function Cart({ s, act, busy }: any) {
                 <Pencil size={13} />
               </Link>
             </div>
-            <form
+            {s.session && <form
               className="coupon"
               onSubmit={(e) => {
                 e.preventDefault();
@@ -2578,7 +2580,7 @@ function Cart({ s, act, busy }: any) {
                   إزالة الخصم
                 </button>
               )}
-            </form>
+            </form>}
             <div className="warning">
               <AlertCircle size={20} />
               <div>
@@ -2593,13 +2595,17 @@ function Cart({ s, act, busy }: any) {
               className="full"
               disabled={!s.cart.length || busy}
               onClick={async () => {
+                if (!s.session) {
+                  go(authPath("login", "/cart"));
+                  return;
+                }
                 if (
                   await act("SUBMIT", {}, "استلمنا طلبكم بكل حب.. وفالكم طيب!")
                 )
                   go("/request-review");
               }}
             >
-              إرسال الطلب للمراجعة
+              {s.session ? contentText("booking.cart.submit","إرسال الطلب للمراجعة") : "سجّلوا الدخول لإرسال الطلب"}
               <Send size={17} />
             </Btn>
             <small className="secure">
@@ -3019,7 +3025,16 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
     [drawn, setDrawn] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
+  const displayedVersion = o?.contract?.version;
+  useEffect(() => {
+    setConsent(false);
+    setSignature("");
+    setDrawn(false);
+    const surface = canvas.current;
+    surface?.getContext("2d")?.clearRect(0,0,surface.width,surface.height);
+  },[displayedVersion]);
   if (!o) return <Empty title="الطلب مو موجود" to="/dashboard" />;
+  const needsAvailability = !isDemo && !o.lines.every(line=>line.response==="CONFIRMED_SUPPLIER");
   const ready = [
     "CUSTOMER_REVIEW",
     "CONTRACT_APPROVED",
@@ -3231,7 +3246,7 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
               سياسة الإلغاء والاسترداد
               <ShieldCheck size={21} />
             </h3>
-            <p>{o.contract?.clauses || s.settings.cancellation}</p>
+            <p>{o.contract?.terms || o.contract?.clauses || s.settings.cancellation}</p>
             <div className="info">
               جميع التفاصيل موضحة في نسخة العقد المعتمدة.
             </div>
@@ -3281,7 +3296,7 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
                 </summary>
                 <p>
                   {i === 3
-                    ? o.contract.clauses
+                    ? o.contract.terms || o.contract.clauses
                     : i === 2
                       ? "تُسدد الدفعات بحسب الجدول أعلاه. أي تعديل بعد التوقيع يصدر في ملحق مستقل ويخضع لموافقة المورد والعميل."
                       : "تلتزم " + brand + " بتنسيق وتنفيذ الخدمات الموضحة في عرض السعر المعتمد وفق التاريخ والموقع المتفق عليهما بكل سنع وأمانة. تُحفظ نسخة العقد والموافقة وإصدار الشروط في سجل الطلب."}
@@ -3323,9 +3338,8 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
                     التوقيع الإلكتروني
                     <Pencil size={22} />
                   </h3>
-                  <p>
-                    أوافق على جميع البنود المذكورة في عرض السعر ومسودة العقد.
-                  </p>
+                  <p>أوافق على بنود الإصدار {o.contract.version} من العقد.</p>
+                  {needsAvailability && <p className="warning" role="status">الفريق يتحقق من توفر الخدمات. يتاح التوقيع بعد تأكيد التوفر.</p>}
                   <label className="check-label">
                     <input
                       type="checkbox"
@@ -3409,7 +3423,7 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
                 </div>
                 <Btn
                   disabled={
-                    !consent ||
+                    needsAvailability || !consent ||
                     (mode === "type" ? signature.trim().length < 3 : !drawn)
                   }
                   onClick={async () => {
@@ -3419,6 +3433,7 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
                         {
                           id,
                           consent,
+                          contractVersion: o.contract.version,
                           signature:
                             mode === "type"
                               ? signature

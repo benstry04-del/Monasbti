@@ -1,3 +1,5 @@
+import { registerBackofficeRoutes } from "./backoffice.mjs";
+import { hasPermission } from "../src/staff-permissions.mjs";
 import {registerReportingRoutes} from './reporting.mjs';
 import {projectedState,stateProjection,adminAnalytics} from './state-projection.mjs';
 import {registerRecordRoutes} from './records.mjs';
@@ -120,6 +122,7 @@ export async function createApp(options = {}) {
   });
   await app.register(helmet, {
     global: true,
+    frameguard: {action:"sameorigin"},
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -130,7 +133,7 @@ export async function createApp(options = {}) {
         mediaSrc: ["'self'", "blob:"],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
-        frameAncestors: ["'none'"],
+        frameAncestors: ["'self'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
         ...(config.production
@@ -162,6 +165,36 @@ export async function createApp(options = {}) {
   });
   await registerAuth(app, { db, config });
   app.addHook('onRequest',integrationRuntimeHook(db,config.encryptionKey));
+  app.addHook("preHandler", async request => {
+    const actor = request.actor;
+    if (!actor?.staffRoleId || actor.role !== "staff") return;
+    const path = request.url.split("?")[0];
+    if (path.startsWith("/api/backoffice/") || path.startsWith("/api/auth/") ||
+        path.startsWith("/api/catalog/") || path.startsWith("/api/availability") ||
+        path === "/api/state" || path === "/api/commands" || path === "/api/content") return;
+    const permissions = [
+      [/^\/api\/calendar$/, "orders.view"],
+      [/^\/api\/report-summary$/, "reports.view"],
+
+      [/^\/api\/(?:contracts|documents\/quote)\//, "contracts.view"],
+      [/^\/api\/(?:payments|documents\/receipt)\//, "payments.view"],
+      [/^\/api\/files(?:\/|$)/, "orders.edit"],
+    ];
+    if (path.startsWith("/api/records/")) return;
+    if (path === "/api/files" && request.method === "POST" &&
+        (hasPermission(actor,"expenses.edit") || hasPermission(actor,"procurement.edit")) &&
+        !request.query.bookingId) return;
+    if (/^\/api\/files\/[a-f0-9-]+$/i.test(path) && request.method === "GET" &&
+        (hasPermission(actor,"expenses.view") || hasPermission(actor,"procurement.view"))) {
+      const id = path.split("/").at(-1);
+      const owned = await db.query("SELECT 1 FROM files WHERE id::text=$1 AND owner_id=$2",[id,actor.id]);
+      if (owned.rowCount) return;
+    }
+    const permission = permissions.find(([pattern]) => pattern.test(path))?.[1];
+    if (path.startsWith("/api/") && (!permission || !hasPermission(actor, permission) ||
+        (request.method !== "GET" && path !== "/api/files")))
+      throw httpError(403, "هذا الإجراء غير مخوّل");
+  });
   app.setErrorHandler((error, request, reply) => {
     const code =
       error.statusCode ||
@@ -206,6 +239,7 @@ export async function createApp(options = {}) {
     }
   });
   await registerRecordRoutes(app);
+  await registerBackofficeRoutes(app);
   await registerReportingRoutes(app);
   app.get("/api/state", async (request) =>
     db.transaction((client) =>
@@ -235,7 +269,7 @@ export async function createApp(options = {}) {
       const projection=await stateProjection(client,request.actor,request.headers['x-app-route']);
       if(input.action==='SELECT_ORDER' && projection.light)projection.bookingIds=[input.payload.id];
       const result=await business.executeCommand(client,request.actor,request.visitorId,input.action,input.payload,key,projection);
-      if(projection.overview)result.analytics=await adminAnalytics(client);
+      if(projection.overview && !request.actor?.staffRoleId)result.analytics=await adminAnalytics(client);
       return result;
     });
   });
@@ -247,19 +281,22 @@ export async function createApp(options = {}) {
     const { page, pageSize, q } = parsed(paginationInput, request.query);
     const table = kind.data === "services" ? "catalog_services" : "packages";
     const column = kind.data === "services" ? "name" : "title";
+    const visible = kind.data === "services"
+      ? "NOT EXISTS (SELECT 1 FROM suppliers s WHERE s.id=catalog_services.supplier_id AND NOT s.active)"
+      : "NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(packages.data->'serviceIds','[]'::jsonb)) item(id) LEFT JOIN catalog_services c ON c.id=item.id LEFT JOIN suppliers s ON s.id=c.supplier_id WHERE c.id IS NULL OR NOT c.active OR s.active=false)";
     const search = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
     return db.transaction(async (client) => {
       const total = Number(
         (
           await client.query(
-            `SELECT count(*) FROM ${table} WHERE active=true AND ${column} ILIKE $1`,
+            `SELECT count(*) FROM ${table} WHERE active=true AND ${visible} AND ${column} ILIKE $1`,
             [search],
           )
         ).rows[0].count,
       );
       const ids = (
         await client.query(
-          `SELECT id FROM ${table} WHERE active=true AND ${column} ILIKE $1 ORDER BY ${column},id LIMIT $2 OFFSET $3`,
+          `SELECT id FROM ${table} WHERE active=true AND ${visible} AND ${column} ILIKE $1 ORDER BY ${column},id LIMIT $2 OFFSET $3`,
           [search, pageSize, (page - 1) * pageSize],
         )
       ).rows.map((row) => row.id);
@@ -267,6 +304,7 @@ export async function createApp(options = {}) {
         client,
         request.actor,
         request.visitorId,
+        false,null,{light:true,catalog:true,bookingIds:[]},
       );
       const list = kind.data === "services" ? state.services : state.packages;
       const items = ids
@@ -292,7 +330,7 @@ export async function createApp(options = {}) {
       request.query,
     );
     const rows = await db.query(
-      `SELECT c.id,COALESCE(a.capacity,c.capacity) AS capacity,COALESCE(a.blocked,false) AS blocked,COALESCE((SELECT sum(r.qty) FROM reservations r WHERE r.service_id=c.id AND r.event_date=$2::date AND (r.status='CONFIRMED' OR (r.status='HELD' AND (r.expires_at IS NULL OR r.expires_at>now())))),0) AS reserved FROM catalog_services c LEFT JOIN service_availability a ON a.service_id=c.id AND a.event_date=$2::date WHERE c.id=$1 AND c.active=true`,
+      `SELECT c.id,COALESCE(a.capacity,c.capacity) AS capacity,COALESCE(a.blocked,false) AS blocked,COALESCE((SELECT sum(r.qty) FROM reservations r WHERE r.service_id=c.id AND r.event_date=$2::date AND (r.status='CONFIRMED' OR (r.status='HELD' AND (r.expires_at IS NULL OR r.expires_at>now())))),0) AS reserved FROM catalog_services c LEFT JOIN service_availability a ON a.service_id=c.id AND a.event_date=$2::date WHERE c.id=$1 AND c.active=true AND NOT EXISTS(SELECT 1 FROM suppliers s WHERE s.id=c.supplier_id AND NOT s.active)`,
       [input.serviceId, input.date],
     );
     if (!rows.rows[0]) throw httpError(404, "الخدمة غير موجودة");
@@ -314,7 +352,7 @@ export async function createApp(options = {}) {
       request.query,
     );
     const result = await db.query(
-      `SELECT c.id,COALESCE(a.capacity,c.capacity) AS capacity,COALESCE(a.blocked,false) AS blocked,COALESCE(r.reserved,0) AS reserved FROM catalog_services c LEFT JOIN service_availability a ON a.service_id=c.id AND a.event_date=$1::date LEFT JOIN (SELECT service_id,sum(qty) AS reserved FROM reservations WHERE event_date=$1::date AND (status='CONFIRMED' OR (status='HELD' AND expires_at>now())) GROUP BY service_id) r ON r.service_id=c.id WHERE c.active=true`,
+      `SELECT c.id,COALESCE(a.capacity,c.capacity) AS capacity,COALESCE(a.blocked,false) AS blocked,COALESCE(r.reserved,0) AS reserved FROM catalog_services c LEFT JOIN service_availability a ON a.service_id=c.id AND a.event_date=$1::date LEFT JOIN (SELECT service_id,sum(qty) AS reserved FROM reservations WHERE event_date=$1::date AND (status='CONFIRMED' OR (status='HELD' AND expires_at>now())) GROUP BY service_id) r ON r.service_id=c.id WHERE c.active=true AND NOT EXISTS(SELECT 1 FROM suppliers s WHERE s.id=c.supplier_id AND NOT s.active)`,
       [date],
     );
     return {
