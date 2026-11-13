@@ -100,6 +100,41 @@ test("scoped staff creates a customer booking and only permitted reads and actio
   assert.equal((await admin.command("CONTRACT_REVISE",{id,terms:"Do not overwrite signed terms"})).status,409);
 });
 
+test("delegated approval checks the assigned role and value at publication", async()=>{
+  const admin=await browser("admin");
+  const staff=await browser("staff");
+  const permissions=["orders.approve"];
+  const original=(await admin.get("/api/backoffice/roles")).body.roles.find(role=>role.name==="Bookings");
+  const role=await admin.post("/api/backoffice/roles",{name:"Quotation approvers",active:true,permissions});
+  assert.equal(role.status,200);
+  const setWorkflow=(delegatedLimit)=>admin.command("SETTINGS",{
+    workflow:{supplierReview:false,staffReview:false,approval:"delegated",delegatedRoleId:role.body.id,delegatedLimit},
+  });
+  const input={customerId:"customer",occasion:{type:"حفل زفاف",date:"2036-02-12",location:"حولي",guests:20},items:[{id:"s1",kind:"service",qty:1}]};
+  const created=await admin.command("ASSISTED_SUBMIT",input);
+  assert.equal(created.status,200,JSON.stringify(created.body));
+  const id=created.body.activeOrder;
+  try {
+    assert.equal((await admin.post("/api/backoffice/role-assignments",{userId:"staff",roleId:role.body.id})).status,200);
+    assert.equal((await setWorkflow(1)).status,200);
+    assert.equal((await staff.command("APPROVE_INTERNAL",{id,reason:"Delegated approval"})).status,200);
+    const overLimit=await admin.command("PUBLISH",{id});
+    assert.equal(overLimit.status,409);
+    assert.match(JSON.stringify(overLimit.body),/تتجاوز حد التفويض/);
+    assert.equal((await setWorkflow(null)).status,200);
+    assert.equal((await admin.post("/api/backoffice/role-assignments",{userId:"staff",roleId:original?.id ?? null})).status,200);
+    const revoked=await admin.command("PUBLISH",{id});
+    assert.equal(revoked.status,409);
+    assert.match(JSON.stringify(revoked.body),/التفويض الحالي/);
+    assert.equal((await admin.post("/api/backoffice/role-assignments",{userId:"staff",roleId:role.body.id})).status,200);
+    const published=await admin.command("PUBLISH",{id});
+    assert.equal(published.status,200,JSON.stringify(published.body));
+  } finally {
+    await admin.post("/api/backoffice/role-assignments",{userId:"staff",roleId:original?.id ?? null});
+    await admin.command("SETTINGS",{workflow:{supplierReview:false,staffReview:false,approval:"owner"}});
+  }
+});
+
 test("expenses, purchase order and CMS writes are linked and audited",async()=>{
   const admin=await browser("admin");
   const guest=await browser();
