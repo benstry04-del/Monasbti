@@ -1,5 +1,15 @@
 import AxeBuilder from '@axe-core/playwright';
-import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import { test, expect, type Locator, type Page } from "@playwright/test";
+
+async function expectPdfDownload(page: Page, link: Locator, filename: RegExp) {
+  const pendingDownload = page.waitForEvent("download");
+  await link.click();
+  const download = await pendingDownload;
+  expect(download.suggestedFilename()).toMatch(filename);
+  const bytes = await readFile(await download.path());
+  expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+}
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() =>
     localStorage.setItem("habbIntroSeenVersion", "1"),
@@ -194,9 +204,12 @@ test("customer, staff and owner complete an actual contract workflow without aut
       "inert",
       "",
     );
+    const quoteLink = customer.getByRole("link", { name: "تحميل العرض PDF" });
+    await expectPdfDownload(customer, quoteLink, /^quote-HB-.*\.pdf$/);
     await customer
       .getByRole("button", { name: "الموافقة وتجهيز العقد", exact: true })
       .click();
+    await expectPdfDownload(customer, customer.getByRole("link", { name: "تنزيل نسخة العقد الموثقة PDF" }), /^contract-HB-.*-v\d+\.pdf$/);
     await customer
       .getByRole("checkbox", {
         name: "أقر وأوافق على الشروط والأحكام",
@@ -212,7 +225,10 @@ test("customer, staff and owner complete an actual contract workflow without aut
     await expect(customer).toHaveURL(new RegExp("/checkout/" + id));
     const document = await customer.request.get("/api/contracts/" + id);
     expect(document.status()).toBe(200);
-    expect(await document.text()).toContain("عميل بيئة التطوير");
+    expect(document.headers()["content-type"]).toContain("application/pdf");
+    const preview = await customer.request.get("/api/contracts/" + id + "?preview=1");
+    expect(preview.headers()["content-type"]).toContain("text/html");
+    expect(await preview.text()).toContain("عميل بيئة التطوير");
     await command('CHANGES',{id,reason:'إضافة خدمة بملحق مستقل'});
     const catalog=await (await operators.admin.request.get('/api/state')).json();
     const source=catalog.services.find((s:any)=>s.id==='s1');
@@ -233,7 +249,8 @@ test("customer, staff and owner complete an actual contract workflow without aut
     const href=await supplement.getAttribute('href');
     const supplementFile=await customer.request.get(href!);
     expect(supplementFile.status()).toBe(200);
-    expect(await supplementFile.text()).toContain('ملحق تعديل عقد تنظيم مناسبة');
+    expect(supplementFile.headers()["content-type"]).toContain("application/pdf");
+    expect((await supplementFile.body()).subarray(0,5).toString()).toBe("%PDF-");
     await customer.goto('/checkout/'+id);
     await customer.screenshot({
       path: "docs/production/real-checkout-desktop.png",

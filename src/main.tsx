@@ -416,11 +416,7 @@ function exportFile(name: string, data: any, type = "application/json") {
     const payment = api
       .get()
       .payments.find((p) => p.receipt + ".html" === name);
-    const endpoint = name.startsWith("quote-")
-      ? "/api/documents/quote/" + encodeURIComponent(name.slice(6, -5))
-      : payment
-        ? "/api/documents/receipt/" + payment.id
-        : null;
+    const endpoint = payment ? "/api/documents/receipt/" + payment.id : null;
     if (endpoint) {
       const a = document.createElement("a");
       a.href = endpoint;
@@ -3172,7 +3168,7 @@ function Amendment({ s, act, o }: any) {
         </Btn>
         </>
       )}
-      {!isDemo && [a,...(o.amendmentHistory || [])].filter(x=>x.version).map(x=><p key={x.id}><a href={`/api/contracts/${encodeURIComponent(o.id)}?version=${x.version}`} download>تنزيل الملحق الموثق · الإصدار {x.version}</a></p>)}
+      {!isDemo && [a,...(o.amendmentHistory || [])].filter(x=>x.version).map(x=><p key={x.id}><a href={`/api/contracts/${encodeURIComponent(o.id)}?format=pdf&version=${x.version}`} download>تنزيل الملحق الموثق PDF · الإصدار {x.version}</a></p>)}
       {a.status === "INTERNAL_REVIEW" &&
         ["admin", "staff"].includes(s.session.role) && (
           <form
@@ -3302,16 +3298,17 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
             {!isDemo && o.contract && (
               <a
                 className="btn outline"
-                href={"/api/contracts/" + encodeURIComponent(id)}
+                href={"/api/contracts/" + encodeURIComponent(id) + "?format=pdf&version=" + o.contract.version}
+                download
               >
-                تنزيل نسخة العقد الموثقة
+                تنزيل نسخة العقد الموثقة PDF
               </a>
             )}
             <h2>
               عرض السعر <span className="pill">الإصدار {o.version}</span>
             </h2>
             <div>
-              <Btn
+              {isDemo ? <Btn
                 variant="outline"
                 onClick={() =>
                   (() => {
@@ -3346,7 +3343,10 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
               >
                 <Download size={15} />
                 تحميل العرض
-              </Btn>
+              </Btn> : <a className="btn outline" href={"/api/documents/quote/" + encodeURIComponent(id) + "?format=pdf"} download>
+                <Download size={15} />
+                تحميل العرض PDF
+              </a>}
               <Btn variant="text" onClick={() => window.print()}>
                 <Printer size={16} />
                 طباعة / PDF

@@ -511,54 +511,32 @@ export async function registerIntegrationRoutes(app) {
     const b = await bookingAccess(db, request.actor, request.params.id);
     if (!b.data.quoteSnapshot && !b.data.contract)
       throw integrationError("العرض لم يعتمد بعد", 409);
-    const data = b.data.contract || {
-      snapshot: b.data.quoteSnapshot,
-      total: b.data.financials?.total,
-      status: b.status,
-      clauses: "عرض سعر معتمد؛ يحفظ العقد وشروطه في وثيقة مستقلة",
-    };
+    const contract = b.data.contract;
     const settings = await currentSettings(db);
-    if (request.query.format === "pdf") {
-      const pdfTitle = data.kind === "AMENDMENT"
-        ? "ملحق عقد تنظيم مناسبة"
-        : b.data.contract && data.kind !== "QUOTE"
-          ? "عقد تنظيم مناسبة"
-          : "عرض سعر تنظيم مناسبة";
-      return reply
-        .type("application/pdf")
-        .header("Cache-Control", "private,no-store")
-        .header("Content-Disposition", `attachment; filename="quote-${encodeURIComponent(b.id)}.pdf"`)
-        .send(businessPDF({
-          settings,
-          branding: data.branding || undefined,
-          docType: "QUOTE",
-          title: pdfTitle,
-          reference: `${b.id} · v${b.version || 1}`,
-          status: data.status || b.status,
-          fields: [
-            { label: "الجهة المنظمة", value: data.company?.name || "" },
-            { label: "السجل التجاري", value: data.company?.registrationNumber || "" },
-            { label: "العميل", value: b.data?.customer || "" },
-            { label: "تاريخ المناسبة", value: b.data?.occasion?.date || "" },
-          ],
-          lines: (data.snapshot || data.lines || b.data?.lines || []).map((line) => ({
-            title: line.title,
-            quantity: line.qty || 1,
-            price: line.price,
-          })),
-          total: data.total,
-          notes: [data.terms || data.clauses].filter(Boolean),
-        }));
-    }
     return reply
-      .header("Cache-Control", "private,no-store")
-      .header("Content-Disposition", 'attachment; filename="quotation.html"')
-      .header(
-        "Content-Security-Policy",
-        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'none'",
-      )
-      .type("text/html; charset=utf-8")
-      .send(contractHTML(b, { version: b.version, status: b.status, data }, settings));
+      .type("application/pdf")
+      .header("Cache-Control", "private, no-store")
+      .header("Content-Disposition", `attachment; filename="quote-${encodeURIComponent(b.id)}.pdf"`)
+      .send(businessPDF({
+        settings,
+        branding: contract?.branding,
+        docType: "QUOTE",
+        title: "عرض سعر تنظيم مناسبة",
+        reference: `${b.id} · v${b.version || 1}`,
+        status: b.status,
+        fields: [
+          { label: "الجهة المنظمة", value: contract?.company?.name || settings?.companyName || "" },
+          { label: "السجل التجاري", value: contract?.company?.registrationNumber || settings?.registrationNumber || "" },
+          { label: "العميل", value: b.data.customer || "" },
+          { label: "تاريخ المناسبة", value: b.data.occasion?.date || "" },
+        ],
+        lines: (b.data.quoteSnapshot || contract?.snapshot || b.data.lines || []).map((line) => ({
+          title: line.title,
+          quantity: line.qty || 1,
+          price: line.price,
+        })),
+        total: b.data.financials?.total ?? contract?.total,
+      }));
   });
   app.get("/api/documents/receipt/:id", authed, async (request, reply) => {
     const pay = (
@@ -913,11 +891,12 @@ export async function registerIntegrationRoutes(app) {
     ).rows[0];
     if (!c) throw integrationError("العقد غير جاهز", 404);
     if(c.data.externalSignature?.fileId)return reply.redirect('/api/files/'+c.data.externalSignature.fileId);
-    if (request.query.format === "pdf") {
+    if (request.query.preview !== "1" || request.query.format === "pdf") {
       const data = c.data;
       const settings = await currentSettings(db);
       return reply.type("application/pdf")
-        .header("Content-Disposition",`attachment; filename="contract-v${c.version}.pdf"`)
+        .header("Cache-Control", "private, no-store")
+        .header("Content-Disposition",`attachment; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.pdf"`)
         .send(businessPDF({
           settings,
           branding: data.branding || undefined,
@@ -952,7 +931,7 @@ export async function registerIntegrationRoutes(app) {
       )
       .header(
         "Content-Disposition",
-        `${request.query.preview === "1" ? "inline" : "attachment"}; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.html"`,
+        `inline; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.html"`,
       )
       .type("text/html; charset=utf-8")
       .send(html);
