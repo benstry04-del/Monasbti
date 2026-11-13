@@ -242,7 +242,7 @@ export async function registerAuth(app, { db, config }) {
       if (decoded.valid && /^[\w-]{43}$/.test(decoded.value)) {
         const sessionHash = tokenHash(decoded.value);
         const result = await db.query(
-          `SELECT u.*,s.csrf_token,s.mfa_verified FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=$1 AND s.expires_at>now() AND u.active=true AND u.verified_at IS NOT NULL`,
+          `SELECT u.*,s.csrf_token,s.mfa_verified FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=$1 AND s.expires_at>now() AND u.active=true AND (u.role='customer' OR u.verified_at IS NOT NULL)`,
           [sessionHash],
         );
         const user = result.rows[0];
@@ -287,8 +287,9 @@ export async function registerAuth(app, { db, config }) {
   }));
   app.post("/api/auth/register", rate(5, "1 hour"), async (request, reply) => {
     const input = validation(registerInput, request.body);
+    let session;
     try {
-      await db.transaction(async (client) => {
+      session = await db.transaction(async (client) => {
         const result = await client.query(
           "INSERT INTO users(id,email,name,mobile,role,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
           [
@@ -300,17 +301,17 @@ export async function registerAuth(app, { db, config }) {
             await hashPassword(input.password),
           ],
         );
-        await issueVerification(client, result.rows[0]);
-        await audit(client, request, "AUTH_REGISTER", result.rows[0].id);
+        const user = result.rows[0];
+        await audit(client, request, "AUTH_REGISTER", user.id);
+        return issueSession(client, user, config, false, request.visitorId);
       });
     } catch (error) {
       if (error.code === "23505")
         throw httpError(409, "هذا البريد مسجل بالفعل", "ACCOUNT_EXISTS");
       throw error;
     }
-    return reply
-      .code(202)
-      .send({ ok: true, requiresVerification: true, email: input.email });
+    setSession(reply, session, config);
+    return reply.code(201).send({ user: session.user, csrfToken: session.csrfToken });
   });
 
   app.post("/api/auth/login", rate(12), async (request, reply) => {
@@ -341,7 +342,7 @@ export async function registerAuth(app, { db, config }) {
           },
         };
       }
-      if (!user.verified_at)
+      if (user.role !== "customer" && !user.verified_at)
         return {
           error: {
             status: 403,

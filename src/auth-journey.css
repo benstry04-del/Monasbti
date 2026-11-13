@@ -17,11 +17,6 @@
 .auth-switch { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 5px; border-radius: 12px; background: #f3e7de; padding: 4px; margin-block-end: 18px; }
 .auth-switch a { min-height: 44px; display: grid; place-items: center; text-align: center; padding: 5px; border-radius: 9px; font-weight: 700; color: #55373a; }
 .auth-switch a[aria-current] { background: #fffdf9; box-shadow: 0 2px 9px #40232719; }
-.auth-steps { display: flex; gap: 16px; flex-wrap: wrap; padding: 0; list-style: none; margin: 0 0 18px; }
-.auth-steps li { display: inline-flex; align-items: center; gap: 7px; color: #6c5456; }
-.auth-steps b { display: inline-grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #f3e7de; }
-.auth-steps [aria-current] { color: #442731; font-weight: 800; }
-.auth-steps [aria-current] b { color: #fff7ef; background: var(--plum-brown); }
 .auth-journey-heading h1 { font-size: clamp(27px,3vw,42px); line-height: 1.2; margin: 5px 0 9px; }
 .auth-journey-heading .eyebrow { color: #78502f; font-weight: 700; }
 .auth-journey-heading p { color: #635052; margin: 0 0 20px; }

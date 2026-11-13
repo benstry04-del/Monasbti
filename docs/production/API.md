@@ -7,7 +7,8 @@ Same-origin `/api`; opaque signed HttpOnly session cookies, server-owned role an
 | Method/path | Purpose / access |
 |---|---|
 | GET /auth/session | Session and CSRF; anonymous allowed |
-| POST /auth/register, /login, /verify, /resend | Real customer registration/verification/login; throttled |
+| POST /auth/register, /login | Registration creates a customer session immediately (201). Login requires a password; non-customer roles retain verification requirements. Both endpoints are throttled. |
+| POST /auth/verify, /resend | Email ownership verification where explicitly required; outside customer signup. |
 | POST /auth/forgot-password, /reset-password | Expiring single-use reset; revokes sessions |
 | POST /auth/mfa/complete | Privileged TOTP enrollment/challenge; replay protection |
 | POST /auth/logout | Session revocation |

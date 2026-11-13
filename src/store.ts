@@ -223,13 +223,16 @@ const realApi: any = {
     return result;
   },
   async register(profile: any, password: string) {
-    return request("/auth/register", {
+    const result = await request("/auth/register", {
       name: profile.name,
       email: profile.email,
       mobile: profile.mobile,
       password,
       location: profile.location,
     });
+    notifyAuthChange();
+    await refresh(true).catch(() => {});
+    return result;
   },
   async verify(email: string, code: string) {
     const result = await request("/auth/verify", { email, code });

@@ -32,10 +32,7 @@ test("mobile home shows a loader before JavaScript and opens with older browser 
   await expect(page.locator(".app-boot")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
-test("real registration, issued verification, persisted authenticated session and server authorization", async ({
-  page,
-  request,
-}) => {
+test("customer registration opens a persistent session without email verification", async ({ page }) => {
   const email = "e2e-" + Date.now() + "@example.test";
   await page.goto("/");
   await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "");
@@ -47,7 +44,7 @@ test("real registration, issued verification, persisted authenticated session an
   );
   await page
     .getByLabel("الاسم الكامل", { exact: true })
-    .fill("عميلة تحقق حقيقية");
+    .fill("عميلة تجربة التسجيل");
   await page.getByLabel("البريد الإلكتروني", { exact: true }).fill(email);
   await page.getByLabel("رقم الهاتف", { exact: true }).fill("96555551234");
   await page.locator('input[name="password"]').fill("Actual-E2E-Password!");
@@ -56,24 +53,11 @@ test("real registration, issued verification, persisted authenticated session an
   await page.getByRole("button",{name:"إخفاء كلمة المرور"}).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "إنشاء حساب", exact: true }).click();
-  await expect(page).toHaveURL(/auth\/verify/);
-  await page.getByRole("link", { name: "العودة لتسجيل الدخول" }).click();
-  await page.getByLabel("البريد الإلكتروني", { exact: true }).fill(email);
-  await page.getByLabel("كلمة المرور", { exact: true }).fill("Actual-E2E-Password!");
-  await page.getByRole("button", { name: "تسجيل الدخول", exact: true }).click();
-  await expect(page.getByRole("alert")).toHaveText("تحقق من بريدك قبل تسجيل الدخول");
-  await page.getByRole("link", { name: "كمّلوا تأكيد البريد" }).click();
-  await expect(page.getByLabel("البريد الإلكتروني", { exact: true })).toHaveValue(email);
-  const response = await request.get("/__test/verification", {
-    params: { email },
-  });
-  const { code } = await response.json();
-  expect(code).toMatch(/^\d{6}$/);
-  await page.getByLabel("رمز التحقق", { exact: true }).fill(code);
-  await page.getByRole("button", { name: "تحقق وتابع", exact: true }).click();
-  await expect(page).toHaveURL(/planner$/);
+  await expect(page).toHaveURL(url => url.pathname === "/planner");
   await page.goto("/dashboard");
   await page.reload();
+  expect((await (await page.request.get("/api/auth/session")).json()).user?.email).toBe(email);
+  await expect(page.locator(".experience-app")).not.toHaveAttribute("inert", "", { timeout: 15000 });
   await expect(
     page.getByRole("heading", { name: /يا هلا ومسهلا عميلة/ }),
   ).toBeVisible();

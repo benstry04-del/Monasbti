@@ -8,7 +8,7 @@ import { authPath, loginDestination } from "./auth-navigation";
 
 const copy = {
   login: ["يا هلا بعودتكم", "سجّلوا دخولكم وكملوا من وين وقفتوا.", "تسجيل الدخول"],
-  register: ["خلّنا نبدأ حكايتكم", "كم معلومة بسيطة، ونزهّب لكم مكان تحفظون فيه كل تفاصيل مناسبتكم.", "إنشاء حساب"],
+  register: ["خلّنا نبدأ حكايتكم", "كم معلومة بسيطة، وبعدها تدخلون حسابكم وتبدون تجهّزون مناسبتكم.", "إنشاء حساب"],
   verify: ["باقي خطوة وتكتمل", "حطّوا رمز التحقق اللي وصلكم على البريد. يتكوّن من ست أرقام.", "تحقق وتابع"],
   "forgot-password": ["نسيتوا كلمة المرور؟", "اكتبوا بريد الحساب ونرسل لكم رابط تعيين كلمة مرور جديدة.", "إرسال رابط الاستعادة"],
   "reset-password": ["نزهّب كلمة مرور جديدة", "اختاروا كلمة مرور جديدة، وبعدها تقدرون تسجّلون دخولكم.", "حفظ كلمة المرور"],
@@ -61,9 +61,8 @@ export function RealAuth({ path }: { path: string }) {
     setNeedsVerification(false);
     try {
       if (register) {
-        await api.register(values, values.password);
-        rememberEmail(values.email);
-        go(authLink("verify"));
+        const result = await api.register(values, values.password);
+        finish(result.user.role);
       } else if (verify) {
         const result = await api.verify(values.email, values.code);
         rememberEmail("");
@@ -114,10 +113,6 @@ export function RealAuth({ path }: { path: string }) {
           <Link to={authLink("login")} aria-current={!register ? "page" : undefined}>عندي حساب</Link>
           <Link to={authLink("register")} aria-current={register ? "page" : undefined}>أول مرة ويانا</Link>
         </nav>}
-        {(register || verify) && <ol className="auth-steps" aria-label="خطوات إنشاء الحساب">
-          <li aria-current={register ? "step" : undefined}><b>{verify ? <Check size={13} /> : "١"}</b> بياناتكم</li>
-          <li aria-current={verify ? "step" : undefined}><b>٢</b> تأكيد البريد</li>
-        </ol>}
         <div className="auth-journey-heading">
           <span className="eyebrow">حياكم الله{identity.name && " في " + identity.name}</span>
           <h1 id="auth-journey-title">{title}</h1>

@@ -34,10 +34,8 @@ async function signup(client, suffix) {
   await client.request('GET', '/api/auth/session');
   const email = `test-${suffix}@example.test`, password = 'A secure passphrase 2026!';
   const result = await client.request('POST','/api/auth/register',{ email, password, name: 'عميل الاختبار', mobile: '+96550001234' });
-  assert.equal(result.status, 202, JSON.stringify(result.body));
-  const job = (await db.query("SELECT payload FROM outbox WHERE job_type='EMAIL' AND payload->>'to'=$1 ORDER BY created_at DESC LIMIT 1", [email])).rows[0];
-  const code = job.payload.text.match(/: (\d{6})/)[1];
-  return { email, password, code };
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  return { email, password, result };
 }
 
 test('scrypt salts passwords and verifies without accepting malformed formats', async () => {
@@ -73,28 +71,38 @@ test('CSRF validates both origin and unpredictable token before mutation', async
   r = await client.request('POST','/api/auth/logout',{}, { origin:'https://attacker.test' }); assert.equal(r.status,403);
   r = await client.request('POST','/api/auth/logout',{}); assert.equal(r.status,200);
 });
-test('registration validates server input, forces customer role, stores scrypt and no session before verification', async () => {
+test('registration validates server input, forces customer role, stores scrypt and immediately creates a session without sending a code', async () => {
   const client = browser(); await client.request('GET','/api/auth/session');
   let r = await client.request('POST','/api/auth/register',{ email:'bad', password:'weak',name:'a',mobile:'1234' }); assert.equal(r.status,400);
   r = await client.request('POST','/api/auth/register',{email:'escalate@example.test',password:'Very secure pass 2026',name:'Escalation',mobile:'50001234',role:'admin'}); assert.equal(r.status,400);
   const account = await signup(client,'registered');
   const user = (await db.query('SELECT * FROM users WHERE email=$1',[account.email])).rows[0];
   assert.match(user.password_hash,/^scrypt\$/); assert.equal(user.role,'customer'); assert.equal(user.verified_at,null);
-  r = await client.request('GET','/api/auth/session'); assert.equal(r.body.user,null);
-  r = await client.request('POST','/api/auth/login',{email:account.email,password:account.password}); assert.equal(r.status,403);
-  r = await client.request('POST','/api/auth/verify',{email:account.email,code:account.code}); assert.equal(r.status,200); assert.equal(r.body.user.email,account.email);
-  const session = (await db.query('SELECT * FROM sessions WHERE user_id=$1',[user.id])).rows[0]; assert.equal(session.id.length,64); assert.notEqual(session.id,r.body.csrfToken);
-  r = await client.request('POST','/api/auth/verify',{email:account.email,code:account.code}); assert.equal(r.status,400);
+  r = await client.request('GET','/api/auth/session');
+  assert.equal(r.body.user.email,account.email);
+  assert.equal(r.body.user.verifiedAt,null);
+  const session = (await db.query('SELECT * FROM sessions WHERE user_id=$1',[user.id])).rows[0];
+  assert.equal(session.id.length,64);
+  assert.notEqual(session.id,r.body.csrfToken);
+  assert.equal((await db.query("SELECT 1 FROM outbox WHERE payload->>'to'=$1",[account.email])).rowCount,0);
+  r = await client.request('POST','/api/auth/register',{email:account.email,password:account.password,name:'عميل آخر',mobile:'50001234'});
+  assert.equal(r.status,409);
 });
-test('verification code locks after five failed attempts', async () => {
-  const client = browser(), account = await signup(client,'locked');
-  const wrong = account.code === '000000' ? '111111' : '000000';
-  for(let i=0;i<5;i++) assert.equal((await client.request('POST','/api/auth/verify',{email:account.email,code:wrong})).status,400);
-  assert.equal((await client.request('POST','/api/auth/verify',{email:account.email,code:account.code})).status,400);
+test('existing unverified customers can log in, while unverified staff still require verification', async () => {
+  const password = 'A secure passphrase 2026!';
+  const hash = await hashPassword(password);
+  await db.query("INSERT INTO users(id,email,name,role,password_hash) VALUES('legacy-c','legacy-c@example.test','عميل','customer',$1),('legacy-s','legacy-s@example.test','موظف','staff',$1)",[hash]);
+  const client = browser();
+  await client.request('GET','/api/auth/session');
+  let r = await client.request('POST','/api/auth/login',{email:'legacy-s@example.test',password});
+  assert.equal(r.status,403);
+  assert.equal(r.body.error.code,'EMAIL_NOT_VERIFIED');
+  r = await client.request('POST','/api/auth/login',{email:'legacy-c@example.test',password});
+  assert.equal(r.status,200);
+  assert.equal((await client.request('GET','/api/auth/session')).body.user.id,'legacy-c');
 });
 test('password reset is single-use, queued and revokes all existing sessions', async () => {
   const client = browser(), account = await signup(client,'recovery');
-  await client.request('POST','/api/auth/verify',{email:account.email,code:account.code});
   let r = await client.request('POST','/api/auth/forgot-password',{email:account.email}); assert.equal(r.status,202);
   const job = (await db.query("SELECT payload FROM outbox WHERE payload->>'to'=$1 AND payload->>'subject' LIKE '%استعادة%' ORDER BY created_at DESC LIMIT 1",[account.email])).rows[0];
   const raw = job.payload.text.match(/token=([\w-]+)/)[1]; assert.ok(raw.length>=40);
