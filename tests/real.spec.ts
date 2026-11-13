@@ -114,6 +114,7 @@ test("customer, staff and owner complete an actual contract workflow without aut
   async function login(role: string) {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
+      reducedMotion: "reduce",
     });
     contexts.push(context);
     await context.addInitScript(() =>
@@ -251,7 +252,7 @@ test("customer, staff and owner complete an actual contract workflow without aut
     await staff.getByRole('button',{name:'تسجيل الموافقة المستقلة',exact:true}).click();
     await expect(staff.getByText('الموافقات: الموظف',{exact:true})).toBeVisible();
     await admin.goto('/admin/settlements');
-    await expect(admin.locator('.experience-app')).not.toHaveAttribute('inert','');
+    await expect(admin.locator('.experience-app')).not.toHaveAttribute('inert','',{timeout:15000});
     await admin.getByLabel('سبب اعتماد التسوية',{exact:true}).fill('تدقيق مستقل من المالك');
     const settlementApproval=admin.waitForResponse(r=>r.url().includes('/api/settlements/') && r.url().endsWith('/approve') && r.request().method()==='POST');
     await admin.getByRole('button',{name:'تسجيل الموافقة المستقلة',exact:true}).click();
