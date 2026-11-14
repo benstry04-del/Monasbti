@@ -1,4 +1,4 @@
-const CACHE = "habb-experience-shell-v4";
+const CACHE = "habb-experience-shell-v5";
 const CORE = [
   "/index.html",
   "/brand-motion/logo/habb-logo-v1.webp",
