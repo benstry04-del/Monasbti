@@ -77,7 +77,7 @@ export function Settlements({ session }: any) {
       {!data && !error && <StatusAlert tone="in-progress" role="status">جارٍ تحميل التسويات…</StatusAlert>}
       {data && (
         <>
-          <div className="kpi-grid">
+          <div className="grid two">
             <section className="card kpi">
               <span>تحويلات مؤكدة من الجهة</span>
               <Price value={Number(data.totals.settled_minor) / 1000} />
@@ -95,31 +95,36 @@ export function Settlements({ session }: any) {
           )}
           {operator && (
             <section className="card">
-              <h3>مستحقات الطلبات المكتملة</h3>
+              <div className="split-row">
+                <h3>مستحقات الطلبات المكتملة</h3>
+                <Badge status={eligible.length ? "PENDING" : "INACTIVE"}>{eligible.length} مستحق جاهز</Badge>
+              </div>
               {eligible.length ? (
                 eligible.map((e) => (
                   <div className="list-row" key={e.booking_id + e.supplier_id}>
                     <div>
                       <b>{e.supplier_name}</b>
-                      <p>{e.booking_id}</p>
+                      <p>الطلب: <bdi>{e.booking_id}</bdi></p>
                       <small>
                         {e.recipient_ref || "يحتاج مرجع مستفيد في ملف المورد"}
                       </small>
                     </div>
-                    <Price value={Number(e.remaining_minor) / 1000} />
-                    <Btn
-                      intent="primary"
-                      loading={busy}
-                      disabled={busy || !e.recipient_ref}
-                      onClick={() =>
-                        mutate("", {
-                          bookingId: e.booking_id,
-                          supplierId: e.supplier_id,
-                        })
-                      }
-                    >
-                      طلب تسوية المستحق
-                    </Btn>
+                    <div className="button-row">
+                      <Price value={Number(e.remaining_minor) / 1000} />
+                      <Btn
+                        intent="primary"
+                        loading={busy}
+                        disabled={busy || !e.recipient_ref}
+                        onClick={() =>
+                          mutate("", {
+                            bookingId: e.booking_id,
+                            supplierId: e.supplier_id,
+                          })
+                        }
+                      >
+                        طلب تسوية المستحق
+                      </Btn>
+                    </div>
                   </div>
                 ))
               ) : (
@@ -133,29 +138,34 @@ export function Settlements({ session }: any) {
           <div className="grid two">
             {data.items.map((r: any) => (
               <section className="card" key={r.id}>
-                <h3>{r.snapshot.supplierName}</h3>
-                <p>{r.booking_id}</p>
-                <p>
-                  <Badge status={r.status}>{names[r.status]}</Badge> ·{" "}
-                  <Price value={r.amount} />
-                </p>
-                <p>
-                  مرجع المستفيد: <bdi>{r.recipient_ref}</bdi>
-                </p>
-                <small>
-                  التسوية: <bdi>{r.id}</bdi>
-                </small>
-                {r.provider_ref && (
+                <div className="split-row">
+                  <h3>{r.snapshot.supplierName}</h3>
+                  <Badge status={r.status}>{names[r.status]}</Badge>
+                </div>
+                <div className="split-row">
+                  <small>الطلب: <bdi>{r.booking_id}</bdi></small>
+                  <strong><Price value={r.amount} /></strong>
+                </div>
+                <div className="nested-flat" style={{ marginTop: 10, marginBottom: 10 }}>
                   <p>
-                    مرجع جهة التحويل: <bdi>{r.provider_ref}</bdi>
+                    مرجع المستفيد: <bdi>{r.recipient_ref}</bdi>
                   </p>
-                )}
-                <details>
-                  <summary>بنود المستحق</summary>
-                  {r.snapshot.lines.map((l: any) => (
-                    <p key={l.id}>
-                      {l.title} · {l.qty} × <Price value={l.costMinor / 1000} />
+                  <small>
+                    رقم التسوية: <bdi>{r.id}</bdi>
+                  </small>
+                  {r.provider_ref && (
+                    <p>
+                      مرجع جهة التحويل: <bdi>{r.provider_ref}</bdi>
                     </p>
+                  )}
+                </div>
+                <details>
+                  <summary>بنود المستحق ({r.snapshot.lines.length})</summary>
+                  {r.snapshot.lines.map((l: any) => (
+                    <div className="list-row" key={l.id}>
+                      <span>{l.title} · {l.qty}</span>
+                      <Price value={l.costMinor / 1000} />
+                    </div>
                   ))}
                 </details>
                 {operator && (
@@ -247,7 +257,7 @@ export function Settlements({ session }: any) {
               disabled={busy || page === 1}
               onClick={() => setPage(page - 1)}
             >
-              الصفحة السابقة
+              السابق
             </Btn>
             <span>الصفحة {page}</span>
             <Btn
@@ -256,7 +266,7 @@ export function Settlements({ session }: any) {
               disabled={busy || !data.hasMore}
               onClick={() => setPage(page + 1)}
             >
-              الصفحة التالية
+              التالي
             </Btn>
           </div>
         </>

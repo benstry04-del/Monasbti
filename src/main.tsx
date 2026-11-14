@@ -411,19 +411,38 @@ function demoDocumentHeading(settings: any, title: string) {
     (identity.logo ? '<img src="' + escape(identity.logo) + '" height="80" alt="">' : '') +
     '<h1>' + escape(identity.title || title);
 }
+function printUnifiedHTML(html: string) {
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(frame);
+  const cleanup = () => setTimeout(() => frame.remove(), 1200);
+  frame.onload = () => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+    } finally {
+      cleanup();
+    }
+  };
+  frame.srcdoc = html;
+}
 function exportFile(name: string, data: any, type = "application/json") {
   if (!isDemo && type === "text/html") {
     const payment = api
       .get()
       .payments.find((p) => p.receipt + ".html" === name);
-    const endpoint = payment ? "/api/documents/receipt/" + payment.id : null;
+    const endpoint = payment ? "/api/documents/receipt/" + encodeURIComponent(payment.id) + "?format=pdf" : null;
     if (endpoint) {
       const a = document.createElement("a");
       a.href = endpoint;
-      a.download = name;
+      a.download = (payment.receipt || "receipt-" + payment.id) + ".pdf";
       a.click();
       return;
     }
+  }
+  if (type === "text/html" && typeof data === "string") {
+    printUnifiedHTML(data);
+    return;
   }
 
   const text = typeof data === "string" ? data : JSON.stringify(data, null, 2),
@@ -434,6 +453,31 @@ function exportFile(name: string, data: any, type = "application/json") {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
+const adminBreadcrumbLabels: Record<string, string> = {
+  "": "نظرة عامة",
+  orders: "الحجوزات والطلبات",
+  assisted: "الحجز المساند",
+  events: "تنفيذ المناسبات",
+  customers: "العملاء والتذاكر",
+  quotes: "عروض الأسعار",
+  approvals: "الاعتمادات",
+  contracts: "العقود",
+  suppliers: "الموردون",
+  procurement: "طلبات التوريد",
+  catalog: "كتالوج الخدمات",
+  packages: "الباقات",
+  payments: "الدفعات",
+  settlements: "التسويات",
+  expenses: "المصروفات",
+  reports: "التقارير",
+  integrations: "الربط والتفعيل",
+  deliveries: "تسليم الإشعارات",
+  users: "الفريق",
+  roles: "الأدوار والصلاحيات",
+  content: "محتوى الموقع",
+  audit: "سجل التدقيق",
+  settings: "الإعدادات",
+};
 function App() {
   const s = useStore();
   const contentText = useContent();
@@ -461,6 +505,7 @@ function App() {
     [busy, setBusy] = useState(false),
     [modal, setModal] = useState<any>(null),
     [menu, setMenu] = useState(false),
+    [sidebarCollapsed, setSidebarCollapsed] = useState(false),
     [signingOut, setSigningOut] = useState(false),
     [demoState, setDemoState] = useState("normal");
   const lastFocus = useRef<any>(null);
@@ -684,9 +729,31 @@ function App() {
     );
   return (
     <>
-      <header className="header">
+      <header className={adminWorkspace ? "header header--admin" : "header"}>
         <div className="header-inner">
+          {adminWorkspace && (
+            <button
+              type="button"
+              className={"icon-btn admin-sidebar-toggle" + (sidebarCollapsed ? " active" : "")}
+              aria-label={sidebarCollapsed ? "إظهار القائمة الجانبية" : "طي القائمة الجانبية"}
+              aria-expanded={!sidebarCollapsed}
+              title={sidebarCollapsed ? "إظهار القائمة الجانبية" : "طي القائمة الجانبية"}
+              onClick={() => setSidebarCollapsed((prev) => !prev)}
+            >
+              <Menu size={19} />
+            </button>
+          )}
           <Logo />
+          {adminWorkspace && (() => {
+            const seg = (path.split("/")[2] || "");
+            const crumbLabel = adminBreadcrumbLabels[seg] || "تفاصيل السجل";
+            return (
+              <div className="admin-topbar-crumb" aria-label="مسار الإدارة">
+                <Link to="/admin">لوحة الإدارة</Link>
+                {seg && <><span aria-hidden="true">/</span><span>{crumbLabel}</span></>}
+              </div>
+            );
+          })()}
           <nav aria-label="القائمة الرئيسية">
             <Link to="/" className={path === "/" ? "active" : ""}>
               الرئيسية
@@ -707,7 +774,7 @@ function App() {
             <Link to="/about">{identity.name ? "عن " + identity.name : "عن المنصة"}</Link>
           </nav>
           <div className="header-actions">
-            {isDemo && (
+            {isDemo && !adminWorkspace && (
               <Link
                 to="/demo/motion"
                 className={
@@ -722,13 +789,21 @@ function App() {
                 <span className="motion-btn-text">تجربة الحركة</span>
               </Link>
             )}
-            <Link
-              className="icon-btn desktop"
-              aria-label="تدورون على خدمة؟"
-              to="/services"
-            >
-              <Search size={19} />
-            </Link>
+            {adminWorkspace && (
+              <Link className="btn outline sm admin-storefront-link" to="/">
+                <House size={15} />
+                <span>عرض الواجهة</span>
+              </Link>
+            )}
+            {!adminWorkspace && (
+              <Link
+                className="icon-btn desktop"
+                aria-label="تدورون على خدمة؟"
+                to="/services"
+              >
+                <Search size={19} />
+              </Link>
+            )}
             {s.session && (
               <Link
                 className="icon-btn notification-nav"
@@ -840,7 +915,14 @@ function App() {
           </Btn>
         </main>
       ) : (
-        <main key={adminWorkspace ? "/admin" : path} className={adminWorkspace ? "admin-workspace" : "page-enter"}>
+        <main
+          key={adminWorkspace ? "/admin" : path}
+          className={
+            adminWorkspace
+              ? "admin-workspace" + (sidebarCollapsed ? " admin-workspace--collapsed" : "")
+              : "page-enter"
+          }
+        >
           {content}
         </main>
       )}
@@ -3033,24 +3115,48 @@ function Booking({ s, act, ask, id }: any) {
                 <X size={17} />
                 طلب إلغاء
               </Btn>
-              <Btn
-                variant="outline"
-                onClick={() =>
-                  exportFile(o.id + ".json", {
-                    id: o.id,
-                    occasion: o.occasion,
-                    services: o.lines.map(({ title, price, qty }) => ({
-                      title,
-                      price,
-                      qty,
-                    })),
-                    status: o.status,
-                  })
-                }
-              >
-                <Download size={17} />
-                تنزيل التفاصيل
-              </Btn>
+              {!isDemo && (o.contract || o.quoteSnapshot) ? (
+                <a
+                  className="btn outline"
+                  href={o.contract ? "/api/contracts/" + encodeURIComponent(o.id) + "?format=pdf&version=" + o.contract.version : "/api/documents/quote/" + encodeURIComponent(o.id) + "?format=pdf"}
+                  download
+                >
+                  <Download size={17} />
+                  تنزيل التفاصيل PDF
+                </a>
+              ) : (
+                <Btn
+                  variant="outline"
+                  onClick={() => {
+                    const b = branding(s.settings);
+                    const [arTitle, ...restTitle] = String(b.title || "").split("|").map((x) => x.trim()).filter(Boolean);
+                    printUnifiedHTML(
+                      renderUnifiedDocument({
+                        title: `ملخص الحجز — ${o.id}`,
+                        docType: "الطلبات والحجوزات",
+                        reference: o.id,
+                        status: o.status,
+                        statusLabel: labels[o.status] || o.status,
+                        brandTitle: arTitle || "هَبّ السعد",
+                        subtitle: restTitle.join(" | "),
+                        brandHTML: b.logo ? `<img src="${escapeDocHTML(b.logo)}" alt="" style="height:74px;max-width:150px;object-fit:contain">` : "",
+                        meta: [
+                          { label: "العميل", value: o.customer },
+                          { label: "المناسبة", value: o.occasion?.type || "" },
+                          { label: "تاريخ المناسبة", value: o.occasion?.date || "" },
+                        ],
+                        tableHeaders: ["الخدمة", "الكمية", "السعر د.ك", "الإجمالي د.ك"],
+                        numericColumns: [1, 2, 3],
+                        tableRows: o.lines.map((l) => [l.title, l.qty, money(l.price), money(l.price * l.qty)]),
+                        footerText: "ملخص حجز صادر من منصة هَبّ السعد · جميع المبالغ بالدينار الكويتي (د.ك).",
+                      }),
+                    );
+                  }}
+                >
+                  <Download size={17} />
+                  طباعة / PDF
+                </Btn>
+              )}
             </div>
             {o.status === "COMPLETED" && (
               <Btn
@@ -3114,13 +3220,52 @@ function Booking({ s, act, ask, id }: any) {
                     {p.refundStatus && <Badge status={p.refundStatus} />}
                   </div>
                   <Price value={p.amount} />
-                  <button
-                    aria-label="تنزيل الإيصال"
-                    className="icon-btn"
-                    onClick={() => exportFile(p.receipt + ".json", p)}
-                  >
-                    <Download size={16} />
-                  </button>
+                  {!isDemo && ["PAID", "REFUNDED", "REFUND_PENDING"].includes(p.status) ? (
+                    <a
+                      aria-label="تنزيل الإيصال"
+                      title="تنزيل الإيصال PDF"
+                      className="icon-btn"
+                      href={"/api/documents/receipt/" + encodeURIComponent(p.id) + "?format=pdf"}
+                      download={"receipt-" + (p.receipt || p.id) + ".pdf"}
+                    >
+                      <Download size={16} />
+                    </a>
+                  ) : (
+                    <button
+                      aria-label="تنزيل الإيصال"
+                      title="حفظ / طباعة الإيصال PDF"
+                      className="icon-btn"
+                      onClick={() => {
+                        const b = branding(s.settings);
+                        const [arTitle, ...restTitle] = String(b.title || "").split("|").map((x) => x.trim()).filter(Boolean);
+                        printUnifiedHTML(
+                          renderUnifiedDocument({
+                            title: "إيصال دفع",
+                            docType: "المستندات المالية",
+                            reference: p.receipt || p.id,
+                            status: p.status,
+                            statusLabel: labels[p.status] || p.status,
+                            brandTitle: arTitle || "هَبّ السعد",
+                            subtitle: restTitle.join(" | "),
+                            brandHTML: b.logo ? `<img src="${escapeDocHTML(b.logo)}" alt="" style="height:74px;max-width:150px;object-fit:contain">` : "",
+                            meta: [
+                              { label: "رقم الإيصال", value: p.receipt || p.id },
+                              { label: "رقم الحجز", value: o.id },
+                              { label: "وسيلة الدفع", value: p.method || "—" },
+                              { label: "التاريخ", value: p.at || "" },
+                            ],
+                            tableHeaders: ["البيان", "المبلغ د.ك"],
+                            numericColumns: [1],
+                            tableRows: [[`دفعة للحجز ${o.id}`, money(p.amount)]],
+                            summaryItems: [{ label: "المبلغ المدفوع", value: `${money(p.amount)} د.ك`, emphasize: true }],
+                            footerText: "إيصال تحصيل صادر من منصة هَبّ السعد · جميع المبالغ بالدينار الكويتي (د.ك).",
+                          }),
+                        );
+                      }}
+                    >
+                      <Download size={16} />
+                    </button>
+                  )}
                 </div>
               ))}
           </section>
@@ -3342,7 +3487,7 @@ function QuoteContract({ s, act, ask, id, contractMode }: any) {
                 }
               >
                 <Download size={15} />
-                تحميل العرض
+                حفظ العرض PDF
               </Btn> : <a className="btn outline" href={"/api/documents/quote/" + encodeURIComponent(id) + "?format=pdf"} download>
                 <Download size={15} />
                 تحميل العرض PDF
@@ -3802,7 +3947,16 @@ function Checkout({ s, act, id, result, setModal }: any) {
               <ArrowLeft size={17} />
             </Btn>
           )}
-          {last.status === "PAID" && (
+          {last.status === "PAID" && (!isDemo ? (
+            <a
+              className="btn outline"
+              href={"/api/documents/receipt/" + encodeURIComponent(last.id) + "?format=pdf"}
+              download={"receipt-" + (last.receipt || last.id) + ".pdf"}
+            >
+              <Download size={17} />
+              تحميل الإيصال PDF
+            </a>
+          ) : (
             <Btn
               variant="outline"
               onClick={() =>
@@ -3838,9 +3992,9 @@ function Checkout({ s, act, id, result, setModal }: any) {
               }
             >
               <Download size={17} />
-              تحميل الإيصال السنع
+              حفظ الإيصال PDF
             </Btn>
-          )}
+          ))}
         </div>
       </div>
     );
@@ -4322,6 +4476,7 @@ export {
   OrderEvent,
   Amendment,
   exportFile,
+  printUnifiedHTML,
   go,
 };
 const mount = document.getElementById("root") as any;

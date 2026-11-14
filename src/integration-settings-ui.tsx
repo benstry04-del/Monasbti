@@ -34,11 +34,11 @@ function IntegrationCard({item,reload}:any){
   </section>;
 }
 export function IntegrationSettings(){
-  const [items,setItems]=useState<any[]>([]),[error,setError]=useState(''),[ready,setReady]=useState(false);
+  const [items,setItems]=useState<any[]>([]),[error,setError]=useState(''),[ready,setReady]=useState(false),[cat,setCat]=useState('all');
   async function load(){try{const data=await api.adminIntegrations();setItems(data.items);setError('');}catch(e:any){setError(e.message);}finally{setReady(true);}}
   useEffect(()=>{if(!isDemo)load();},[]);
   if(isDemo)return <Empty title="الربط والتفعيل متاح في النظام الفعلي" to={null} />;
-  return <div className="integrations-view"><h2>الربط والتفعيل</h2><p>للمالك فقط. الأسرار محفوظة مشفرة على الخادم، ولا تظهر بعد الحفظ. اختبر المسودة ثم فعّلها عندما توفر الحسابات الفعلية.</p>{error && <StatusAlert tone="error" role="alert" action={<Btn intent="warn" onClick={load}>إعادة المحاولة</Btn>}>{error}</StatusAlert>}{!ready && <StatusAlert tone="in-progress" role="status">جارٍ تحميل إعدادات الربط…</StatusAlert>}<div className="grid two">{items.map(item=><IntegrationCard key={item.id} item={item} reload={load} />)}</div></div>;
+  return <div className="integrations-view"><div className="split-row"><h2>الربط والتفعيل</h2><div className="seg-toggle" role="group" aria-label="تصنيف الربط">{[['all','الكل'],['pay','الدفع والتحويل'],['notify','الإرسال والتنبيهات'],['ops','التعاقد والاستضافة']].map(([k,l])=><button type="button" key={k} className={cat===k?'active':''} aria-pressed={cat===k} onClick={()=>setCat(k)}>{l}</button>)}</div></div><p>للمالك فقط. الأسرار محفوظة مشفرة على الخادم، ولا تظهر بعد الحفظ. اختبر المسودة ثم فعّلها عندما توفر الحسابات الفعلية.</p>{error && <StatusAlert tone="error" role="alert" action={<Btn intent="warn" onClick={load}>إعادة المحاولة</Btn>}>{error}</StatusAlert>}{!ready && <StatusAlert tone="in-progress" role="status">جارٍ تحميل إعدادات الربط…</StatusAlert>}<div className="grid two integration-grid-even">{items.filter(item=>cat==='all'||(cat==='pay'&&/pay|payout|tap|fatoorah|knet/i.test(String(item.category||item.group||item.id)))||(cat==='notify'&&/mail|smtp|resend|sms|whatsapp|notif|messag/i.test(String(item.category||item.group||item.id)))||(cat==='ops'&&!/pay|payout|tap|fatoorah|knet|mail|smtp|resend|sms|whatsapp|notif|messag/i.test(String(item.category||item.group||item.id)))).map(item=><IntegrationCard key={item.id} item={item} reload={load} />)}</div></div>;
 }
 export function DeliveryHistory({id}:{id?:string}={}){
   const [data,setData]=useState<any>(null),[page,setPage]=useState(1),[status,setStatus]=useState(''),[error,setError]=useState('');

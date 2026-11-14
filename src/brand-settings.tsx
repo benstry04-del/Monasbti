@@ -30,7 +30,7 @@ export function BrandSettings({ settings, act }: any) {
     reader.readAsDataURL(file);
   }
 
-  return <form className="card settings-form section" onSubmit={async event => {
+  return <form className="card section" onSubmit={async event => {
     event.preventDefault();
     setBusy(true);
     try {
@@ -41,13 +41,16 @@ export function BrandSettings({ settings, act }: any) {
   }}>
     <h2>هوية العلامة</h2>
     <p>اترك الاسم فارغًا لإخفائه. يمكن رفع كل صورة أو حذفها بصورة مستقلة. عند تغيير الهوية تظهر شاشة البداية المحدثة بدل الفيلم الأصلي، لأن الهوية الأصلية مدمجة في الفيديو.</p>
-    <Field label="اسم العلامة بالعربية">
-      <input maxLength={100} value={preview.name} onChange={e => update('brand', e.target.value)} />
-    </Field>
-    <Field label="الاسم اللاتيني">
-      <input maxLength={100} dir="auto" value={preview.latin} onChange={e => update('brandLatin', e.target.value)} />
-    </Field>
-    {images.map(([key, slot, label]) => <fieldset className="card" key={key}>
+    <div className="form-grid-2">
+      <Field label="اسم العلامة بالعربية">
+        <input maxLength={100} value={preview.name} onChange={e => update('brand', e.target.value)} />
+      </Field>
+      <Field label="الاسم اللاتيني">
+        <input maxLength={100} dir="auto" value={preview.latin} onChange={e => update('brandLatin', e.target.value)} />
+      </Field>
+    </div>
+    {Object.keys(draft).length > 0 && <StatusAlert tone="warning" role="status">توجد تعديلات غير محفوظة على الهوية — اضغط على «حفظ الهوية» لاعتمادها.</StatusAlert>}
+    <div className="grid three">{images.map(([key, slot, label]) => <fieldset className="nested-flat" key={key}>
       <legend>{label}</legend>
       {preview[slot] && <img src={preview[slot]} alt={label} style={{ width: 112, height: 76, objectFit: 'contain' }} />}
       <input type="file" accept="image/png,image/jpeg,image/webp" aria-label={label} disabled={busy}
@@ -56,7 +59,7 @@ export function BrandSettings({ settings, act }: any) {
         <Btn type="button" variant="outline" intent="danger" onClick={() => update(key, null)}>حذف الصورة</Btn>
         <Btn type="button" variant="text" intent="warn" onClick={() => update(key, logoDefaults[slot])}>استعادة الصورة الأصلية</Btn>
       </div>
-    </fieldset>)}
+    </fieldset>)}</div>
     {error && <StatusAlert tone="error" role="alert">{error}</StatusAlert>}
     <div className="button-row">
       <Btn type="submit" intent="success" loading={busy} disabled={busy || !Object.keys(draft).length}>حفظ الهوية</Btn>
