@@ -190,6 +190,11 @@ test("customer, staff and owner complete an actual contract workflow without aut
         .click();
       await expect(p.getByRole("dialog")).toHaveCount(0);
       if (role === "admin") {
+        await p.getByRole("link",{name:"معاينة العقد قبل الإرسال",exact:true}).click();
+        await p.getByText("فتح معاينة مسودة العقد",{exact:true}).click();
+        const draftFrame=p.frameLocator('iframe[title="معاينة مسودة العقد قبل الإرسال"]');
+        await expect(draftFrame.getByText("عقد تنظيم مناسبة",{exact:false}).first()).toBeVisible();
+        await expectPdfDownload(p,p.getByRole("link",{name:"تنزيل المسودة PDF"}),/^contract-HB-.*\.pdf$/);
         await p
           .getByRole("button", { name: "إرسال عرض السعر", exact: true })
           .click();

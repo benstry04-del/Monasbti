@@ -84,6 +84,17 @@ test("scoped staff creates a customer booking and only permitted reads and actio
   assert.equal((await staff.command("APPROVE_INTERNAL",{id,reason:"Denied"})).status,403);
 
   await admin.command("SETTINGS",{workflow:{supplierReview:false,staffReview:false,approval:"owner"}});
+  const draftUrl="/api/contracts/"+id+"?draft=1&preview=1";
+  assert.equal((await customer.get(draftUrl)).status,403);
+  assert.equal((await staff.get(draftUrl)).status,403);
+  const draft=await admin.get(draftUrl);
+  assert.equal(draft.status,200);
+  assert.match(draft.body,/عقد تنظيم مناسبة/);
+  assert.match(draft.body,/مسودة/);
+  const draftPdf=await admin.get("/api/contracts/"+id+"?draft=1&format=pdf");
+  assert.equal(draftPdf.status,200);
+  assert.ok(draftPdf.body.startsWith("%PDF-"));
+  assert.equal(Number((await db.query("SELECT count(*) FROM contracts WHERE booking_id=$1",[id])).rows[0].count),0);
   assert.equal((await admin.command("APPROVE_INTERNAL",{id,reason:"Owner approval"})).status,200);
   assert.equal((await admin.command("PUBLISH",{id})).status,200);
   assert.equal((await customer.command("QUOTE_ACCEPT",{id})).status,200);

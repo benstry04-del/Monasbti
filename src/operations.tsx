@@ -1373,6 +1373,7 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
               إرسال عرض السعر
               <Send size={16} />
             </Btn>
+            {!isDemo && !contractIssued && hasPermission(s.session,"contracts.view") && <a className="btn outline" href="#order-contract">معاينة العقد قبل الإرسال</a>}
             {canEdit && editableStatus && <Btn variant="outline" intent="warn" onClick={() => ask("إعادة الطلب للمراجعة", "ORDER_REVIEW_DECISION", { id, decision: "review" })}>إعادة للمراجعة</Btn>}
             {editableStatus && s.session.role === "admin" && <Btn variant="text" intent="danger" onClick={() => ask("رفض الطلب", "ORDER_REVIEW_DECISION", { id, decision: "reject" })}>رفض الطلب</Btn>}
             {editableStatus && s.session.role === "admin" && <Btn variant="text" intent="danger" onClick={() => ask("إلغاء الطلب", "ORDER_REVIEW_DECISION", { id, decision: "cancel" })}>إلغاء الطلب</Btn>}
@@ -1427,6 +1428,18 @@ function OrderEditor({ s, act, ask, id, setModal }: any) {
           </form>}
         </section>
       </div>
+      {!isDemo && !o.contract && hasPermission(s.session,"contracts.view") && <section className="card section" id="order-contract">
+        <h3>معاينة العقد قبل الإرسال</h3>
+        <p>راجع بيانات العميل والخدمات والإجمالي والبنود وجدول الدفعات. هذه مسودة داخلية تُحدّث بحسب بيانات الطلب وإعدادات الشركة.</p>
+        <details>
+          <summary>فتح معاينة مسودة العقد</summary>
+          <div className="button-row section">
+            <a className="btn outline" href={"/api/contracts/"+encodeURIComponent(o.id)+"?draft=1&preview=1"} target="_blank" rel="noreferrer">فتح المسودة للطباعة</a>
+            <a className="btn outline" href={"/api/contracts/"+encodeURIComponent(o.id)+"?draft=1&format=pdf"} download>تنزيل المسودة PDF</a>
+          </div>
+          <iframe key={o.version} title="معاينة مسودة العقد قبل الإرسال" src={"/api/contracts/"+encodeURIComponent(o.id)+"?draft=1&preview=1&revision="+o.version} loading="lazy" style={{width:"100%",minHeight:560,border:"1px solid var(--sand)",borderRadius:12}}/>
+        </details>
+      </section>}
       {o.contract && hasPermission(s.session,"contracts.view") && <ContractDetails order={o} actor={s.session} act={act}/>}
       {!!s.payments.filter(p=>p.orderId===id).length && <section className="card section"><h3>دفعات الحجز</h3>
         {s.payments.filter(payment=>payment.orderId===id).map(payment=><Link className="list-row" key={payment.id} to={"/admin/payments/"+payment.id}>

@@ -15,6 +15,7 @@ import {
 import { contractHTML, receiptHTML, escapeHTML, brandSnapshot, documentBrandHTML } from "./providers/documents.mjs";
 import { installmentMinors, totals } from "../src/money.mjs";
 import {integrationEnvironment} from './integration-runtime.mjs';
+import {hasPermission} from '../src/staff-permissions.mjs';
 
 const uuid = z.string().uuid();
 const keySchema = z
@@ -880,10 +881,27 @@ export async function registerIntegrationRoutes(app) {
   });
   app.get("/api/contracts/:bookingId", authed, async (request, reply) => {
     const b = await bookingAccess(db, request.actor, request.params.bookingId);
+    const draft = request.query.draft === "1";
+    const settings = await currentSettings(db);
+    if (draft && !hasPermission(request.actor,"contracts.view"))
+      throw integrationError("معاينة المسودة متاحة للإدارة المخولة",403);
+    if (draft && b.data.contract)
+      throw integrationError("صدر العقد بالفعل؛ افتح النسخة المحفوظة",409);
     const version = request.query.version
       ? z.coerce.number().int().min(1).parse(request.query.version)
       : null;
-    const c = (
+    const c = draft ? {
+      version:b.version, status:"DRAFT",
+      data:{
+        version:b.version, status:"DRAFT",
+        snapshot:b.data.quoteSnapshot || b.data.lines,
+        total:totals(b.data.quoteSnapshot || b.data.lines,b.data.discount || 0,0,settings.taxRate || 0).total,
+        branding:brandSnapshot(settings),
+        company:{name:settings.companyName || "",registrationNumber:settings.registrationNumber || ""},
+        terms:settings.terms || settings.cancellation,
+        paymentSchedule:[settings.deposit,settings.second,100-settings.deposit-settings.second],
+      },
+    } : (
       await db.query(
         "SELECT * FROM contracts WHERE booking_id=$1 AND ($2::integer IS NULL OR version=$2) ORDER BY version DESC LIMIT 1",
         [b.id, version],
@@ -893,7 +911,6 @@ export async function registerIntegrationRoutes(app) {
     if(c.data.externalSignature?.fileId)return reply.redirect('/api/files/'+c.data.externalSignature.fileId);
     if (request.query.preview !== "1" || request.query.format === "pdf") {
       const data = c.data;
-      const settings = await currentSettings(db);
       return reply.type("application/pdf")
         .header("Cache-Control", "private, no-store")
         .header("Content-Disposition",`attachment; filename="contract-${encodeURIComponent(b.id)}-v${c.version}.pdf"`)
@@ -909,7 +926,7 @@ export async function registerIntegrationRoutes(app) {
             { label: "السجل التجاري", value: data.company?.registrationNumber || "" },
             { label: "العميل", value: b.data.customer },
             { label: "تاريخ المناسبة", value: b.data.occasion.date },
-            { label: "حالة التوقيع", value: c.status === "SIGNED" ? "العقد موقّع" : "بانتظار التوقيع" },
+            { label: "حالة التوقيع", value: draft ? "مسودة داخلية قبل الإرسال" : c.status === "SIGNED" ? "العقد موقّع" : "بانتظار التوقيع" },
           ],
           lines:(data.snapshot || data.lines || []).map(line=>({title:line.title,quantity:line.qty,price:line.price})),
           total:data.total,
@@ -922,7 +939,7 @@ export async function registerIntegrationRoutes(app) {
         }));
     }
     // Render the frozen version, never the mutable catalog.
-    const html = c.data.html || contractHTML(b, c);
+    const html = c.data.html || contractHTML(b, c, settings);
     return reply
       .header("Cache-Control", "private, no-store")
       .header(
